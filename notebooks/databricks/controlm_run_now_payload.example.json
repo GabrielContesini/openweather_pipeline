@@ -4,6 +4,7 @@
     "p_storage_protocol": "abfss",
     "p_storage_account": "tropowxdlprod",
     "p_container": "openweather-data",
+    "p_allow_plaintext_credentials": "false",
     "p_cities": "Sao Paulo,BR;Rio de Janeiro,BR;Curitiba,BR",
     "p_openweather_endpoints": "weather",
     "p_openweather_secret_scope": "kv-openweather",

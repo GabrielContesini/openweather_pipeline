@@ -22,6 +22,7 @@ DEFAULT_WIDGETS = {
     "p_openweather_lang": "pt_br",
     "p_openweather_timeout_seconds": "30",
     "p_cities": "Sao Paulo,BR;Rio de Janeiro,BR;Curitiba,BR",
+    "p_allow_plaintext_credentials": "false",
     "p_api_key": "",
     "p_openweather_secret_scope": "",
     "p_openweather_secret_key": "",
@@ -69,6 +70,95 @@ def resolve_secret_or_plain(
     return ""
 
 
+def str_to_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "y"}
+
+
+def get_spark_conf_or_empty(key: str) -> str:
+    try:
+        value = spark.conf.get(key)
+        return value.strip() if value else ""
+    except Exception:
+        return ""
+
+
+def resolve_openweather_api_key(*, require_api_key: bool) -> tuple[str, str]:
+    allow_plain = str_to_bool(dbutils.widgets.get("p_allow_plaintext_credentials"))
+    api_key_from_spark = get_spark_conf_or_empty("pipeline.openweather.api_key")
+    if api_key_from_spark:
+        return api_key_from_spark, "spark_conf:pipeline.openweather.api_key"
+
+    secret_scope = dbutils.widgets.get("p_openweather_secret_scope").strip()
+    secret_key = dbutils.widgets.get("p_openweather_secret_key").strip()
+    if secret_scope and secret_key:
+        return (
+            dbutils.secrets.get(secret_scope, secret_key),
+            f"secret:{secret_scope}/{secret_key}",
+        )
+
+    plain_api_key = dbutils.widgets.get("p_api_key").strip()
+    if plain_api_key:
+        if not allow_plain:
+            raise ValueError(
+                "p_api_key was provided but p_allow_plaintext_credentials=false. "
+                "Use Job spark conf (pipeline.openweather.api_key) or secret scope/key widgets."
+            )
+        return plain_api_key, "widget:p_api_key"
+
+    if require_api_key:
+        raise ValueError(
+            "Missing OpenWeather API key. Use one of: "
+            "1) Job spark conf 'pipeline.openweather.api_key', "
+            "2) p_openweather_secret_scope + p_openweather_secret_key, "
+            "3) (manual only) p_api_key with p_allow_plaintext_credentials=true."
+        )
+    return "", "not_required"
+
+
+def resolve_storage_account_key(storage_account: str) -> tuple[str, str]:
+    allow_plain = str_to_bool(dbutils.widgets.get("p_allow_plaintext_credentials"))
+    storage_key_from_spark = get_spark_conf_or_empty("pipeline.storage.account_key")
+    if storage_key_from_spark:
+        return storage_key_from_spark, "spark_conf:pipeline.storage.account_key"
+
+    storage_key_from_dfs_conf = get_spark_conf_or_empty(
+        f"fs.azure.account.key.{storage_account}.dfs.core.windows.net"
+    )
+    if storage_key_from_dfs_conf:
+        return (
+            storage_key_from_dfs_conf,
+            f"spark_conf:fs.azure.account.key.{storage_account}.dfs.core.windows.net",
+        )
+
+    storage_key_from_blob_conf = get_spark_conf_or_empty(
+        f"fs.azure.account.key.{storage_account}.blob.core.windows.net"
+    )
+    if storage_key_from_blob_conf:
+        return (
+            storage_key_from_blob_conf,
+            f"spark_conf:fs.azure.account.key.{storage_account}.blob.core.windows.net",
+        )
+
+    secret_scope = dbutils.widgets.get("p_storage_secret_scope").strip()
+    secret_key = dbutils.widgets.get("p_storage_secret_key").strip()
+    if secret_scope and secret_key:
+        return (
+            dbutils.secrets.get(secret_scope, secret_key),
+            f"secret:{secret_scope}/{secret_key}",
+        )
+
+    plain_storage_key = dbutils.widgets.get("p_storage_account_key").strip()
+    if plain_storage_key:
+        if not allow_plain:
+            raise ValueError(
+                "p_storage_account_key was provided but p_allow_plaintext_credentials=false. "
+                "Use Job spark conf (pipeline.storage.account_key) or secret scope/key widgets."
+            )
+        return plain_storage_key, "widget:p_storage_account_key"
+
+    return "", "not_provided"
+
+
 def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
     ensure_base_widgets()
 
@@ -81,21 +171,6 @@ def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
     lang = dbutils.widgets.get("p_openweather_lang").strip() or "pt_br"
     timeout_seconds = int(dbutils.widgets.get("p_openweather_timeout_seconds").strip())
     cities = parse_list(dbutils.widgets.get("p_cities").strip(), ";")
-
-    api_key = resolve_secret_or_plain(
-        plain_value=dbutils.widgets.get("p_api_key").strip(),
-        secret_scope=dbutils.widgets.get("p_openweather_secret_scope").strip(),
-        secret_key=dbutils.widgets.get("p_openweather_secret_key").strip(),
-        required=require_api_key,
-        value_name="OpenWeather API key",
-    )
-    storage_account_key = resolve_secret_or_plain(
-        plain_value=dbutils.widgets.get("p_storage_account_key").strip(),
-        secret_scope=dbutils.widgets.get("p_storage_secret_scope").strip(),
-        secret_key=dbutils.widgets.get("p_storage_secret_key").strip(),
-        required=False,
-        value_name="Azure Storage key",
-    )
 
     if not storage_account:
         raise ValueError("Widget p_storage_account is required.")
@@ -111,12 +186,15 @@ def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
     storage_endpoint = (
         "dfs.core.windows.net" if storage_protocol == "abfss" else "blob.core.windows.net"
     )
+    api_key, api_key_source = resolve_openweather_api_key(require_api_key=require_api_key)
+    storage_account_key, storage_key_source = resolve_storage_account_key(storage_account)
     base_uri = f"{storage_protocol}://{container}@{storage_account}.{storage_endpoint}"
     return {
         "storage_protocol": storage_protocol,
         "storage_endpoint": storage_endpoint,
         "storage_account": storage_account,
         "storage_account_key": storage_account_key,
+        "storage_key_source": storage_key_source,
         "container": container,
         "base_uri": base_uri,
         "openweather_base_url": base_url,
@@ -126,6 +204,7 @@ def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
         "openweather_timeout_seconds": timeout_seconds,
         "cities": cities,
         "openweather_api_key": api_key,
+        "openweather_api_key_source": api_key_source,
     }
 
 

@@ -92,9 +92,37 @@ Widgets principais usados pelos notebooks:
 - `p_container` (default `openweather-data`)
 - `p_cities` (formato com `;`, ex.: `Sao Paulo,BR;Rio de Janeiro,BR`)
 - `p_openweather_endpoints` (default `weather`)
-- `p_openweather_secret_scope` + `p_openweather_secret_key` (recomendado para API key)
-- `p_storage_secret_scope` + `p_storage_secret_key` (opcional para account key)
+- `p_openweather_secret_scope` + `p_openweather_secret_key` (preferencial para API key)
+- `p_storage_secret_scope` + `p_storage_secret_key` (preferencial para account key)
+- `p_allow_plaintext_credentials` (default `false`; manter assim em producao)
 - `p_stage_timeout_seconds` (somente no `99`, default `0`)
+
+### Credenciais no job (recomendado)
+
+Nao use `p_api_key` ou `p_storage_account_key` em producao.
+
+Opcoes seguras:
+
+1. Passar apenas `scope/key` no job params (sem valor secreto).
+2. Ou configurar Spark conf no Job Cluster:
+   - `pipeline.openweather.api_key = {{secrets/<scope>/<key>}}`
+   - `pipeline.storage.account_key = {{secrets/<scope>/<key>}}`
+
+Os notebooks priorizam credenciais por Spark conf, depois secret scope/key, e so aceitam plaintext quando `p_allow_plaintext_credentials=true`.
+
+### Teste manual sem expor credencial em widget
+
+Para teste manual no Workspace:
+
+1. Deixe `p_allow_plaintext_credentials=false`.
+2. Preencha somente:
+   - `p_openweather_secret_scope` + `p_openweather_secret_key`
+   - `p_storage_secret_scope` + `p_storage_secret_key`
+3. Execute `99_controlm_entrypoint`.
+
+Somente se necessario para debug rapido:
+
+- use `p_api_key` / `p_storage_account_key` com `p_allow_plaintext_credentials=true`.
 
 ## Control-M orchestration
 
@@ -107,7 +135,7 @@ Ordem tecnica:
 3. `99` encadeia os demais notebooks.
 4. Control-M captura o JSON de saida para auditoria e alertas.
 
-Se seu cluster ja tem permissao no storage (Managed Identity / Service Principal), nao precisa passar account key via widget.
+Se seu cluster ja tem permissao no storage (Managed Identity / Service Principal), o `p_storage_account_key` pode ficar vazio.
 
 Template de payload para `Jobs API 2.1 /jobs/run-now`:
 

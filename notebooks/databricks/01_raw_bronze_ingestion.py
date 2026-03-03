@@ -69,6 +69,8 @@ manifest = {
     "storage_account": config["storage_account"],
     "cities": config["cities"],
     "openweather_endpoints": config["openweather_endpoints"],
+    "openweather_api_key_source": config["openweather_api_key_source"],
+    "storage_key_source": config["storage_key_source"],
     "raw_records": raw_records,
     "bronze_records": bronze_records,
     "storage_preflight_path": preflight_path,
@@ -83,6 +85,8 @@ output_payload = {
     "ingestion_hour": watermark["ingestion_hour"],
     "raw_records": raw_records,
     "bronze_records": bronze_records,
+    "openweather_api_key_source": config["openweather_api_key_source"],
+    "storage_key_source": config["storage_key_source"],
     "storage_preflight_path": preflight_path,
     "manifest_path": manifest_path,
 }
