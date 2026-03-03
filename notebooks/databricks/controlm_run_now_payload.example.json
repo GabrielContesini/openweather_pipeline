@@ -1,0 +1,14 @@
+{
+  "job_id": 123456789012345,
+  "notebook_params": {
+    "p_storage_account": "tropowxdlprod",
+    "p_container": "openweather-data",
+    "p_cities": "Sao Paulo,BR;Rio de Janeiro,BR;Curitiba,BR",
+    "p_openweather_endpoints": "weather",
+    "p_openweather_secret_scope": "kv-openweather",
+    "p_openweather_secret_key": "openweather-api-key",
+    "p_storage_secret_scope": "kv-openweather",
+    "p_storage_secret_key": "storage-account-key",
+    "p_stage_timeout_seconds": "0"
+  }
+}
