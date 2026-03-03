@@ -86,6 +86,7 @@ Pacote de notebooks pronto para importar no Databricks:
 
 Widgets principais usados pelos notebooks:
 
+- `p_storage_protocol` (`abfss` para ADLS Gen2/HNS, `wasbs` para Blob sem HNS)
 - `p_storage_account` (default `tropowxdlprod`)
 - `p_container` (default `openweather-data`)
 - `p_cities` (formato com `;`, ex.: `Sao Paulo,BR;Rio de Janeiro,BR`)

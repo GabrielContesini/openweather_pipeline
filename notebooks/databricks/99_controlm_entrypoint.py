@@ -35,13 +35,19 @@ def build_base_args() -> dict[str, str]:
 base_dir = current_notebook_dir()
 base_args = build_base_args()
 
-raw_result = json.loads(
-    dbutils.notebook.run(
-        f"{base_dir}/01_raw_bronze_ingestion",
-        stage_timeout_seconds,
-        base_args,
-    )
-)
+def run_stage(stage_name: str, notebook_name: str, args: dict[str, str]) -> dict:
+    notebook_path = f"{base_dir}/{notebook_name}"
+    try:
+        result_text = dbutils.notebook.run(notebook_path, stage_timeout_seconds, args)
+        return json.loads(result_text)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Stage '{stage_name}' failed in notebook '{notebook_path}'. "
+            "Open this notebook run output in Databricks Jobs for the exact root error."
+        ) from exc
+
+
+raw_result = run_stage("raw_bronze", "01_raw_bronze_ingestion", base_args)
 
 silver_args = {
     **base_args,
@@ -50,13 +56,7 @@ silver_args = {
     "p_ingestion_hour": raw_result["ingestion_hour"],
     "p_endpoint_for_silver": "weather",
 }
-silver_result = json.loads(
-    dbutils.notebook.run(
-        f"{base_dir}/02_silver_transform",
-        stage_timeout_seconds,
-        silver_args,
-    )
-)
+silver_result = run_stage("silver", "02_silver_transform", silver_args)
 
 gold_args = {
     **base_args,
@@ -64,13 +64,7 @@ gold_args = {
     "p_ingestion_date": raw_result["ingestion_date"],
     "p_ingestion_hour": raw_result["ingestion_hour"],
 }
-gold_result = json.loads(
-    dbutils.notebook.run(
-        f"{base_dir}/03_gold_transform",
-        stage_timeout_seconds,
-        gold_args,
-    )
-)
+gold_result = run_stage("gold", "03_gold_transform", gold_args)
 
 pipeline_result = {
     "status": "ok",

@@ -13,6 +13,7 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 DEFAULT_WIDGETS = {
+    "p_storage_protocol": "abfss",
     "p_storage_account": "tropowxdlprod",
     "p_container": "openweather-data",
     "p_openweather_base_url": "https://api.openweathermap.org/data/2.5",
@@ -71,6 +72,7 @@ def resolve_secret_or_plain(
 def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
     ensure_base_widgets()
 
+    storage_protocol = dbutils.widgets.get("p_storage_protocol").strip().lower() or "abfss"
     storage_account = dbutils.widgets.get("p_storage_account").strip()
     container = dbutils.widgets.get("p_container").strip()
     base_url = dbutils.widgets.get("p_openweather_base_url").strip().rstrip("/")
@@ -99,13 +101,20 @@ def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
         raise ValueError("Widget p_storage_account is required.")
     if not container:
         raise ValueError("Widget p_container is required.")
+    if storage_protocol not in {"abfss", "wasbs"}:
+        raise ValueError("Widget p_storage_protocol must be either 'abfss' or 'wasbs'.")
     if not endpoints:
         raise ValueError("Widget p_openweather_endpoints must contain at least one endpoint.")
     if not cities:
         raise ValueError("Widget p_cities must contain at least one city.")
 
-    base_uri = f"abfss://{container}@{storage_account}.dfs.core.windows.net"
+    storage_endpoint = (
+        "dfs.core.windows.net" if storage_protocol == "abfss" else "blob.core.windows.net"
+    )
+    base_uri = f"{storage_protocol}://{container}@{storage_account}.{storage_endpoint}"
     return {
+        "storage_protocol": storage_protocol,
+        "storage_endpoint": storage_endpoint,
         "storage_account": storage_account,
         "storage_account_key": storage_account_key,
         "container": container,
@@ -124,6 +133,10 @@ def configure_storage_access(storage_account: str, storage_account_key: str) -> 
     if storage_account_key:
         spark.conf.set(
             f"fs.azure.account.key.{storage_account}.dfs.core.windows.net",
+            storage_account_key,
+        )
+        spark.conf.set(
+            f"fs.azure.account.key.{storage_account}.blob.core.windows.net",
             storage_account_key,
         )
 
