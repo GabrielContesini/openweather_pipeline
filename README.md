@@ -124,6 +124,14 @@ Somente se necessario para debug rapido:
 
 - use `p_api_key` / `p_storage_account_key` com `p_allow_plaintext_credentials=true`.
 
+Se aparecer erro `CONFIG_NOT_AVAILABLE` para `fs.azure.account.key...`, seu cluster provavelmente bloqueia esse config em runtime. Nesse caso:
+
+1. Configure a key no Cluster Spark config:
+   - `spark.hadoop.fs.azure.account.key.<storage_account>.dfs.core.windows.net {{secrets/<scope>/<key>}}`
+   - `spark.hadoop.fs.azure.account.key.<storage_account>.blob.core.windows.net {{secrets/<scope>/<key>}}`
+2. Reinicie o cluster.
+3. Rode novamente com `p_allow_plaintext_credentials=false`.
+
 ## Control-M orchestration
 
 Recomendacao especialista: o Control-M chama apenas o notebook `99_controlm_entrypoint`.

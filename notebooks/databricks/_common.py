@@ -82,6 +82,16 @@ def get_spark_conf_or_empty(key: str) -> str:
         return ""
 
 
+def get_hadoop_conf_or_empty(key: str) -> str:
+    try:
+        value = spark.sparkContext._jsc.hadoopConfiguration().get(key)
+        if value is None:
+            return ""
+        return value.strip()
+    except Exception:
+        return ""
+
+
 def resolve_openweather_api_key(*, require_api_key: bool) -> tuple[str, str]:
     allow_plain = str_to_bool(dbutils.widgets.get("p_allow_plaintext_credentials"))
     api_key_from_spark = get_spark_conf_or_empty("pipeline.openweather.api_key")
@@ -121,6 +131,24 @@ def resolve_storage_account_key(storage_account: str) -> tuple[str, str]:
     if storage_key_from_spark:
         return storage_key_from_spark, "spark_conf:pipeline.storage.account_key"
 
+    storage_key_from_dfs_spark_hadoop_conf = get_spark_conf_or_empty(
+        f"spark.hadoop.fs.azure.account.key.{storage_account}.dfs.core.windows.net"
+    )
+    if storage_key_from_dfs_spark_hadoop_conf:
+        return (
+            storage_key_from_dfs_spark_hadoop_conf,
+            f"spark_conf:spark.hadoop.fs.azure.account.key.{storage_account}.dfs.core.windows.net",
+        )
+
+    storage_key_from_blob_spark_hadoop_conf = get_spark_conf_or_empty(
+        f"spark.hadoop.fs.azure.account.key.{storage_account}.blob.core.windows.net"
+    )
+    if storage_key_from_blob_spark_hadoop_conf:
+        return (
+            storage_key_from_blob_spark_hadoop_conf,
+            f"spark_conf:spark.hadoop.fs.azure.account.key.{storage_account}.blob.core.windows.net",
+        )
+
     storage_key_from_dfs_conf = get_spark_conf_or_empty(
         f"fs.azure.account.key.{storage_account}.dfs.core.windows.net"
     )
@@ -137,6 +165,24 @@ def resolve_storage_account_key(storage_account: str) -> tuple[str, str]:
         return (
             storage_key_from_blob_conf,
             f"spark_conf:fs.azure.account.key.{storage_account}.blob.core.windows.net",
+        )
+
+    storage_key_from_dfs_hadoop_conf = get_hadoop_conf_or_empty(
+        f"fs.azure.account.key.{storage_account}.dfs.core.windows.net"
+    )
+    if storage_key_from_dfs_hadoop_conf:
+        return (
+            storage_key_from_dfs_hadoop_conf,
+            f"hadoop_conf:fs.azure.account.key.{storage_account}.dfs.core.windows.net",
+        )
+
+    storage_key_from_blob_hadoop_conf = get_hadoop_conf_or_empty(
+        f"fs.azure.account.key.{storage_account}.blob.core.windows.net"
+    )
+    if storage_key_from_blob_hadoop_conf:
+        return (
+            storage_key_from_blob_hadoop_conf,
+            f"hadoop_conf:fs.azure.account.key.{storage_account}.blob.core.windows.net",
         )
 
     secret_scope = dbutils.widgets.get("p_storage_secret_scope").strip()
@@ -210,11 +256,24 @@ def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
 
 def configure_storage_access(storage_account: str, storage_account_key: str) -> None:
     if storage_account_key:
-        spark.conf.set(
+        target_keys = [
+            f"spark.hadoop.fs.azure.account.key.{storage_account}.dfs.core.windows.net",
+            f"spark.hadoop.fs.azure.account.key.{storage_account}.blob.core.windows.net",
+            f"fs.azure.account.key.{storage_account}.dfs.core.windows.net",
+            f"fs.azure.account.key.{storage_account}.blob.core.windows.net",
+        ]
+        for config_key in target_keys:
+            try:
+                spark.conf.set(config_key, storage_account_key)
+            except Exception:
+                pass
+
+        hadoop_conf = spark.sparkContext._jsc.hadoopConfiguration()
+        hadoop_conf.set(
             f"fs.azure.account.key.{storage_account}.dfs.core.windows.net",
             storage_account_key,
         )
-        spark.conf.set(
+        hadoop_conf.set(
             f"fs.azure.account.key.{storage_account}.blob.core.windows.net",
             storage_account_key,
         )
