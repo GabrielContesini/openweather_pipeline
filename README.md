@@ -72,6 +72,7 @@ Pacote de notebooks pronto para importar no Databricks:
 ### Fluxo
 
 1. `01_raw_bronze_ingestion`: extrai API e grava `raw` + `bronze`.
+   - inclui `storage_preflight_check` para validar escrita no storage antes da carga.
 2. `02_silver_transform`: transforma `bronze` em `silver` (Delta).
 3. `03_gold_transform`: agrega `silver` em `gold` (Delta).
 4. `99_controlm_entrypoint`: orquestra `01 -> 02 -> 03` e retorna JSON unico.

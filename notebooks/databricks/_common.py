@@ -302,7 +302,31 @@ def write_json_document(path: str, payload: dict[str, Any], compact: bool = Fals
         if compact
         else json.dumps(payload, ensure_ascii=False, indent=2)
     )
-    dbutils.fs.put(path, content, True)
+    try:
+        dbutils.fs.put(path, content, True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to write JSON to path '{path}'. "
+            "Check storage protocol, container name, and storage credentials."
+        ) from exc
+
+
+def storage_preflight_check(config: dict[str, Any], watermark: dict[str, Any]) -> str:
+    check_path = (
+        f"{config['base_uri']}/raw/openweather/_control/healthcheck/"
+        f"run_id={watermark['run_id']}.json"
+    )
+    check_payload = {
+        "status": "ok",
+        "check": "storage_write",
+        "storage_protocol": config["storage_protocol"],
+        "storage_account": config["storage_account"],
+        "container": config["container"],
+        "run_id": watermark["run_id"],
+        "ingestion_ts_utc": watermark["ingestion_ts_utc"],
+    }
+    write_json_document(check_path, check_payload, compact=False)
+    return check_path
 
 
 def write_run_manifest(base_uri: str, manifest: dict[str, Any]) -> str:

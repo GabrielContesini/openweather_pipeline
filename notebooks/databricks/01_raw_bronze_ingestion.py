@@ -11,6 +11,7 @@
 config = get_runtime_config()
 configure_storage_access(config["storage_account"], config["storage_account_key"])
 watermark = build_watermark()
+preflight_path = storage_preflight_check(config, watermark)
 
 raw_records = 0
 bronze_records = 0
@@ -70,6 +71,7 @@ manifest = {
     "openweather_endpoints": config["openweather_endpoints"],
     "raw_records": raw_records,
     "bronze_records": bronze_records,
+    "storage_preflight_path": preflight_path,
 }
 manifest_path = write_run_manifest(config["base_uri"], manifest)
 
@@ -81,6 +83,7 @@ output_payload = {
     "ingestion_hour": watermark["ingestion_hour"],
     "raw_records": raw_records,
     "bronze_records": bronze_records,
+    "storage_preflight_path": preflight_path,
     "manifest_path": manifest_path,
 }
 

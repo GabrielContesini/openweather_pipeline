@@ -41,9 +41,10 @@ def run_stage(stage_name: str, notebook_name: str, args: dict[str, str]) -> dict
         result_text = dbutils.notebook.run(notebook_path, stage_timeout_seconds, args)
         return json.loads(result_text)
     except Exception as exc:
+        root_details = str(exc)
         raise RuntimeError(
             f"Stage '{stage_name}' failed in notebook '{notebook_path}'. "
-            "Open this notebook run output in Databricks Jobs for the exact root error."
+            f"Root details: {root_details}"
         ) from exc
 
 
