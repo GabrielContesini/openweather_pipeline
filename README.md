@@ -132,6 +132,18 @@ Se aparecer erro `CONFIG_NOT_AVAILABLE` para `fs.azure.account.key...`, seu clus
 2. Reinicie o cluster.
 3. Rode novamente com `p_allow_plaintext_credentials=false`.
 
+### Serverless compute
+
+No Serverless, acesso direto ao JVM (`spark.sparkContext`) nao e suportado e certas configuracoes de credencial em runtime podem ser bloqueadas por policy.
+
+Recomendacao para producao em Serverless:
+
+1. Criar Storage Credential + External Location no Unity Catalog.
+2. Gravar em caminho governado (external location/volume) em vez de injetar account key no notebook.
+
+Para primeiro teste rapido, se sua policy permitir, use secret scope/key via widgets sem plaintext.
+Se a policy bloquear acesso direto ao ADLS por key, rode o primeiro ciclo em cluster single-user ou passe a usar External Location.
+
 ## Control-M orchestration
 
 Recomendacao especialista: o Control-M chama apenas o notebook `99_controlm_entrypoint`.
