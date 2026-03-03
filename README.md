@@ -64,6 +64,7 @@ uv run python src/extract_data.py --env-file config/.env --local-only
 Pacote de notebooks pronto para importar no Databricks:
 
 - `notebooks/databricks/_common.py`
+- `notebooks/databricks/00_smoke_test.py`
 - `notebooks/databricks/01_raw_bronze_ingestion.py`
 - `notebooks/databricks/02_silver_transform.py`
 - `notebooks/databricks/03_gold_transform.py`
@@ -71,44 +72,53 @@ Pacote de notebooks pronto para importar no Databricks:
 
 ### Fluxo
 
+0. `00_smoke_test`: valida dependencias, credenciais e escrita no storage.
 1. `01_raw_bronze_ingestion`: extrai API e grava `raw` + `bronze`.
    - inclui `storage_preflight_check` para validar escrita no storage antes da carga.
-2. `02_silver_transform`: transforma `bronze` em `silver` (Delta).
-3. `03_gold_transform`: agrega `silver` em `gold` (Delta).
+2. `02_silver_transform`: transforma `bronze` em `silver` (Parquet).
+3. `03_gold_transform`: agrega `silver` em `gold` (Parquet).
 4. `99_controlm_entrypoint`: orquestra `01 -> 02 -> 03` e retorna JSON unico.
+
+Observacao: os notebooks Databricks foram ajustados para modo Serverless-safe.
+Eles nao dependem de `sparkContext`, `abfss` ou `spark.conf.set` para acessar storage.
+A leitura/escrita no Azure e feita direto via `azure-storage-blob`.
 
 ### Como importar
 
 1. No Databricks Workspace, crie uma pasta de projeto.
 2. Importe os arquivos `.py` acima como notebooks source.
-3. Execute primeiro o `99_controlm_entrypoint` para validar o fluxo completo.
+3. Execute primeiro `00_smoke_test`.
+4. Depois execute `99_controlm_entrypoint`.
 
 ### Widgets e segredos
 
 Widgets principais usados pelos notebooks:
 
-- `p_storage_protocol` (`abfss` para ADLS Gen2/HNS, `wasbs` para Blob sem HNS)
 - `p_storage_account` (default `tropowxdlprod`)
 - `p_container` (default `openweather-data`)
 - `p_cities` (formato com `;`, ex.: `Sao Paulo,BR;Rio de Janeiro,BR`)
 - `p_openweather_endpoints` (default `weather`)
 - `p_openweather_secret_scope` + `p_openweather_secret_key` (preferencial para API key)
+- `p_storage_connection_string_secret_scope` + `p_storage_connection_string_secret_key` (opcional)
 - `p_storage_secret_scope` + `p_storage_secret_key` (preferencial para account key)
+- `p_storage_sas_secret_scope` + `p_storage_sas_secret_key` (opcional)
 - `p_allow_plaintext_credentials` (default `false`; manter assim em producao)
 - `p_stage_timeout_seconds` (somente no `99`, default `0`)
 
 ### Credenciais no job (recomendado)
 
-Nao use `p_api_key` ou `p_storage_account_key` em producao.
+Nao use `p_api_key`, `p_storage_account_key`, `p_storage_connection_string` ou `p_storage_sas_token` em producao.
 
-Opcoes seguras:
+Use segredo por scope/key ou Spark conf no Job:
 
-1. Passar apenas `scope/key` no job params (sem valor secreto).
-2. Ou configurar Spark conf no Job Cluster:
-   - `pipeline.openweather.api_key = {{secrets/<scope>/<key>}}`
-   - `pipeline.storage.account_key = {{secrets/<scope>/<key>}}`
+1. `pipeline.openweather.api_key`
+2. `pipeline.storage.connection_string` ou `pipeline.storage.account_key` ou `pipeline.storage.sas_token`
 
-Os notebooks priorizam credenciais por Spark conf, depois secret scope/key, e so aceitam plaintext quando `p_allow_plaintext_credentials=true`.
+Prioridade de leitura das credenciais:
+
+1. Spark conf
+2. Secret scope/key (widgets)
+3. Plaintext widget (somente com `p_allow_plaintext_credentials=true`)
 
 ### Teste manual sem expor credencial em widget
 
@@ -117,32 +127,25 @@ Para teste manual no Workspace:
 1. Deixe `p_allow_plaintext_credentials=false`.
 2. Preencha somente:
    - `p_openweather_secret_scope` + `p_openweather_secret_key`
+   - `p_storage_connection_string_secret_scope` + `p_storage_connection_string_secret_key` (se usar connection string), ou
    - `p_storage_secret_scope` + `p_storage_secret_key`
+   - `p_storage_sas_secret_scope` + `p_storage_sas_secret_key` (se usar SAS)
 3. Execute `99_controlm_entrypoint`.
 
 Somente se necessario para debug rapido:
 
-- use `p_api_key` / `p_storage_account_key` com `p_allow_plaintext_credentials=true`.
+- use `p_api_key` e um metodo storage (`p_storage_account_key` ou `p_storage_connection_string` ou `p_storage_sas_token`) com `p_allow_plaintext_credentials=true`.
 
-Se aparecer erro `CONFIG_NOT_AVAILABLE` para `fs.azure.account.key...`, seu cluster provavelmente bloqueia esse config em runtime. Nesse caso:
+### Dependencias do cluster
 
-1. Configure a key no Cluster Spark config:
-   - `spark.hadoop.fs.azure.account.key.<storage_account>.dfs.core.windows.net {{secrets/<scope>/<key>}}`
-   - `spark.hadoop.fs.azure.account.key.<storage_account>.blob.core.windows.net {{secrets/<scope>/<key>}}`
-2. Reinicie o cluster.
-3. Rode novamente com `p_allow_plaintext_credentials=false`.
+Garanta no cluster/serverless environment:
 
-### Serverless compute
+1. `azure-storage-blob`
+2. `pyarrow`
+3. `pandas`
+4. `requests`
 
-No Serverless, acesso direto ao JVM (`spark.sparkContext`) nao e suportado e certas configuracoes de credencial em runtime podem ser bloqueadas por policy.
-
-Recomendacao para producao em Serverless:
-
-1. Criar Storage Credential + External Location no Unity Catalog.
-2. Gravar em caminho governado (external location/volume) em vez de injetar account key no notebook.
-
-Para primeiro teste rapido, se sua policy permitir, use secret scope/key via widgets sem plaintext.
-Se a policy bloquear acesso direto ao ADLS por key, rode o primeiro ciclo em cluster single-user ou passe a usar External Location.
+Obs.: o notebook `_common.py` tenta auto-instalar `azure-storage-blob` e `pyarrow` caso nao encontre.
 
 ## Control-M orchestration
 

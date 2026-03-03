@@ -2,7 +2,9 @@
 # MAGIC %md
 # MAGIC # 02 - Silver Transform
 # MAGIC
-# MAGIC Reads `bronze` weather files for one run and writes curated `silver` Delta dataset.
+# MAGIC Serverless-safe transform:
+# MAGIC - reads bronze JSON directly from Azure Blob
+# MAGIC - builds curated silver table in Parquet
 
 # COMMAND ----------
 # MAGIC %run ./_common
@@ -14,58 +16,49 @@ ensure_widget("p_ingestion_hour", "")
 ensure_widget("p_endpoint_for_silver", "weather")
 
 config = get_runtime_config(require_api_key=False)
-configure_storage_access(config["storage_account"], config["storage_account_key"])
+container_client = get_container_client(config, create_if_missing=False)
 
 run_context = resolve_run_context(
-    base_uri=config["base_uri"],
+    container_client,
     run_id=dbutils.widgets.get("p_run_id").strip(),
     ingestion_date=dbutils.widgets.get("p_ingestion_date").strip(),
     ingestion_hour=dbutils.widgets.get("p_ingestion_hour").strip(),
 )
 endpoint = dbutils.widgets.get("p_endpoint_for_silver").strip() or "weather"
 
-bronze_path = (
-    f"{config['base_uri']}/bronze/openweather/{endpoint}/"
+bronze_prefix = (
+    f"bronze/openweather/{endpoint}/"
     f"ingestion_date={run_context['ingestion_date']}/"
     f"ingestion_hour={run_context['ingestion_hour']}/"
 )
+bronze_blob_names = [
+    blob_name
+    for blob_name in list_blob_names(container_client, bronze_prefix)
+    if f"run_id={run_context['run_id']}.json" in blob_name
+]
+if not bronze_blob_names:
+    raise ValueError(
+        f"No bronze blobs found for run_id={run_context['run_id']} under prefix {bronze_prefix}"
+    )
 
-bronze_df = spark.read.option("multiLine", "true").json(bronze_path)
+silver_rows = [
+    bronze_to_silver_row(download_json_blob(container_client, blob_name))
+    for blob_name in bronze_blob_names
+]
+silver_df = pd.DataFrame(silver_rows)
+if silver_df.empty:
+    raise ValueError("Silver dataframe is empty after bronze transformation.")
 
-silver_df = (
-    bronze_df.withColumn("event_date", F.to_date("observation_ts_utc"))
-    .withColumn("watermark_ingestion_epoch", F.col("watermark_ingestion_epoch").cast("long"))
-    .withColumn("watermark_source_epoch", F.col("watermark_source_epoch").cast("long"))
-    .withColumn("observation_epoch", F.col("observation_epoch").cast("long"))
-    .withColumn("city_id", F.col("city_id").cast("long"))
-    .withColumn("temperature_celsius", F.col("temperature_celsius").cast("double"))
-    .withColumn("feels_like_celsius", F.col("feels_like_celsius").cast("double"))
-    .withColumn("temp_min_celsius", F.col("temp_min_celsius").cast("double"))
-    .withColumn("temp_max_celsius", F.col("temp_max_celsius").cast("double"))
-    .withColumn("pressure_hpa", F.col("pressure_hpa").cast("double"))
-    .withColumn("humidity_pct", F.col("humidity_pct").cast("double"))
-    .withColumn("wind_speed_ms", F.col("wind_speed_ms").cast("double"))
-    .withColumn("wind_deg", F.col("wind_deg").cast("double"))
-    .withColumn("cloudiness_pct", F.col("cloudiness_pct").cast("double"))
-    .withColumn("latitude", F.col("latitude").cast("double"))
-    .withColumn("longitude", F.col("longitude").cast("double"))
-    .select(
-        "watermark_run_id",
-        "watermark_ingestion_ts_utc",
+silver_df = coerce_numeric_columns(
+    silver_df,
+    [
         "watermark_ingestion_epoch",
         "watermark_source_epoch",
-        "watermark_source_ts_utc",
-        "event_date",
         "city_id",
-        "city_name",
-        "country",
         "latitude",
         "longitude",
         "observation_epoch",
-        "observation_ts_utc",
         "timezone_offset_seconds",
-        "weather_main",
-        "weather_description",
         "temperature_celsius",
         "feels_like_celsius",
         "temp_min_celsius",
@@ -75,20 +68,28 @@ silver_df = (
         "wind_speed_ms",
         "wind_deg",
         "cloudiness_pct",
-        "sunrise_ts_utc",
-        "sunset_ts_utc",
-    )
+    ],
 )
 
-silver_row_count = silver_df.count()
-silver_path = (
-    f"{config['base_uri']}/silver/openweather/openweather_current_weather/"
-    f"ingestion_date={run_context['ingestion_date']}/"
-    f"ingestion_hour={run_context['ingestion_hour']}/"
-    f"run_id={run_context['run_id']}"
+silver_blob_path = build_dataset_blob_path(
+    layer="silver",
+    dataset="openweather_current_weather",
+    run_id=run_context["run_id"],
+    ingestion_date=run_context["ingestion_date"],
+    ingestion_hour=run_context["ingestion_hour"],
+    extension="parquet",
 )
-
-silver_df.write.format("delta").mode("overwrite").save(silver_path)
+silver_watermark = {
+    "run_id": run_context["run_id"],
+    "ingestion_ts_utc": str(silver_df.iloc[0]["watermark_ingestion_ts_utc"]),
+    "ingestion_epoch": int(float(silver_df.iloc[0]["watermark_ingestion_epoch"])),
+}
+upload_parquet_blob(
+    container_client,
+    silver_blob_path,
+    silver_df,
+    metadata=build_blob_metadata("silver", silver_watermark),
+)
 
 output_payload = {
     "status": "ok",
@@ -96,11 +97,12 @@ output_payload = {
     "run_id": run_context["run_id"],
     "ingestion_date": run_context["ingestion_date"],
     "ingestion_hour": run_context["ingestion_hour"],
-    "input_path": bronze_path,
-    "output_path": silver_path,
-    "row_count": silver_row_count,
+    "input_prefix": bronze_prefix,
+    "input_blob_count": len(bronze_blob_names),
+    "output_blob_path": silver_blob_path,
+    "row_count": len(silver_df),
     "run_context_source": run_context["source"],
 }
 
-print(json.dumps(output_payload, indent=2))
+print(json.dumps(output_payload, indent=2, ensure_ascii=False))
 dbutils.notebook.exit(json.dumps(output_payload))

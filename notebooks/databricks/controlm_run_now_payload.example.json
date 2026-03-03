@@ -1,7 +1,6 @@
 {
   "job_id": 123456789012345,
   "notebook_params": {
-    "p_storage_protocol": "abfss",
     "p_storage_account": "tropowxdlprod",
     "p_container": "openweather-data",
     "p_allow_plaintext_credentials": "false",
@@ -9,8 +8,12 @@
     "p_openweather_endpoints": "weather",
     "p_openweather_secret_scope": "kv-openweather",
     "p_openweather_secret_key": "openweather-api-key",
+    "p_storage_connection_string_secret_scope": "",
+    "p_storage_connection_string_secret_key": "",
     "p_storage_secret_scope": "kv-openweather",
     "p_storage_secret_key": "storage-account-key",
+    "p_storage_sas_secret_scope": "",
+    "p_storage_sas_secret_key": "",
     "p_stage_timeout_seconds": "0"
   }
 }

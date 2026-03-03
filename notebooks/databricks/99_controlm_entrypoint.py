@@ -17,8 +17,6 @@ ensure_widget("p_stage_timeout_seconds", "0")
 for widget_name, widget_default in DEFAULT_WIDGETS.items():
     ensure_widget(widget_name, widget_default)
 
-config = get_runtime_config()
-configure_storage_access(config["storage_account"], config["storage_account_key"])
 stage_timeout_seconds = int(dbutils.widgets.get("p_stage_timeout_seconds").strip() or "0")
 
 

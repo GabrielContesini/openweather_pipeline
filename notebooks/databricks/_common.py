@@ -2,18 +2,36 @@
 # COMMAND ----------
 import json
 import re
+import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
+from io import BytesIO
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import pandas as pd
 import requests
-from pyspark.sql import functions as F
+
+try:
+    from azure.core.exceptions import ResourceExistsError
+    from azure.storage.blob import BlobServiceClient, ContentSettings
+except ImportError as exc:
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "azure-storage-blob", "pyarrow", "-q"]
+        )
+        from azure.core.exceptions import ResourceExistsError
+        from azure.storage.blob import BlobServiceClient, ContentSettings
+    except Exception as install_exc:
+        raise ImportError(
+            "Missing dependency: azure-storage-blob/pyarrow and auto-install failed. "
+            "Install these packages in the Databricks environment."
+        ) from install_exc
 
 
 # COMMAND ----------
 DEFAULT_WIDGETS = {
-    "p_storage_protocol": "abfss",
     "p_storage_account": "tropowxdlprod",
     "p_container": "openweather-data",
     "p_openweather_base_url": "https://api.openweathermap.org/data/2.5",
@@ -26,9 +44,15 @@ DEFAULT_WIDGETS = {
     "p_api_key": "",
     "p_openweather_secret_scope": "",
     "p_openweather_secret_key": "",
+    "p_storage_connection_string": "",
+    "p_storage_connection_string_secret_scope": "",
+    "p_storage_connection_string_secret_key": "",
     "p_storage_account_key": "",
     "p_storage_secret_scope": "",
     "p_storage_secret_key": "",
+    "p_storage_sas_token": "",
+    "p_storage_sas_secret_scope": "",
+    "p_storage_sas_secret_key": "",
 }
 
 
@@ -51,25 +75,6 @@ def parse_list(raw_value: str, separator: str) -> list[str]:
     return [part.strip() for part in raw_value.split(separator) if part.strip()]
 
 
-def resolve_secret_or_plain(
-    *,
-    plain_value: str,
-    secret_scope: str,
-    secret_key: str,
-    required: bool,
-    value_name: str,
-) -> str:
-    if plain_value:
-        return plain_value
-    if secret_scope and secret_key:
-        return dbutils.secrets.get(secret_scope, secret_key)
-    if required:
-        raise ValueError(
-            f"Missing {value_name}. Provide plain value or secret scope/key widgets."
-        )
-    return ""
-
-
 def str_to_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y"}
 
@@ -82,163 +87,193 @@ def get_spark_conf_or_empty(key: str) -> str:
         return ""
 
 
+def get_secret_or_empty(secret_scope: str, secret_key: str) -> str:
+    if not secret_scope or not secret_key:
+        return ""
+    return dbutils.secrets.get(secret_scope, secret_key)
+
+
+def require_plaintext_opt_in(widget_name: str) -> None:
+    if not str_to_bool(dbutils.widgets.get("p_allow_plaintext_credentials")):
+        raise ValueError(
+            f"{widget_name} informed but p_allow_plaintext_credentials=false. "
+            "Use spark conf or secret scope/key."
+        )
+
+
 def resolve_openweather_api_key(*, require_api_key: bool) -> tuple[str, str]:
-    allow_plain = str_to_bool(dbutils.widgets.get("p_allow_plaintext_credentials"))
     api_key_from_spark = get_spark_conf_or_empty("pipeline.openweather.api_key")
     if api_key_from_spark:
         return api_key_from_spark, "spark_conf:pipeline.openweather.api_key"
 
-    secret_scope = dbutils.widgets.get("p_openweather_secret_scope").strip()
-    secret_key = dbutils.widgets.get("p_openweather_secret_key").strip()
-    if secret_scope and secret_key:
-        return (
-            dbutils.secrets.get(secret_scope, secret_key),
-            f"secret:{secret_scope}/{secret_key}",
-        )
+    scope = dbutils.widgets.get("p_openweather_secret_scope").strip()
+    key = dbutils.widgets.get("p_openweather_secret_key").strip()
+    api_key_from_secret = get_secret_or_empty(scope, key)
+    if api_key_from_secret:
+        return api_key_from_secret, f"secret:{scope}/{key}"
 
-    plain_api_key = dbutils.widgets.get("p_api_key").strip()
-    if plain_api_key:
-        if not allow_plain:
-            raise ValueError(
-                "p_api_key was provided but p_allow_plaintext_credentials=false. "
-                "Use Job spark conf (pipeline.openweather.api_key) or secret scope/key widgets."
-            )
-        return plain_api_key, "widget:p_api_key"
+    api_key_plain = dbutils.widgets.get("p_api_key").strip()
+    if api_key_plain:
+        require_plaintext_opt_in("p_api_key")
+        return api_key_plain, "widget:p_api_key"
 
     if require_api_key:
         raise ValueError(
-            "Missing OpenWeather API key. Use one of: "
-            "1) Job spark conf 'pipeline.openweather.api_key', "
+            "Missing OpenWeather API key. Use: "
+            "1) spark conf pipeline.openweather.api_key, "
             "2) p_openweather_secret_scope + p_openweather_secret_key, "
-            "3) (manual only) p_api_key with p_allow_plaintext_credentials=true."
+            "3) (manual) p_api_key with p_allow_plaintext_credentials=true."
         )
     return "", "not_required"
 
 
-def resolve_storage_account_key(storage_account: str) -> tuple[str, str]:
-    allow_plain = str_to_bool(dbutils.widgets.get("p_allow_plaintext_credentials"))
-    storage_key_from_spark = get_spark_conf_or_empty("pipeline.storage.account_key")
-    if storage_key_from_spark:
-        return storage_key_from_spark, "spark_conf:pipeline.storage.account_key"
+def resolve_storage_auth() -> dict[str, str]:
+    conn_string_from_spark = get_spark_conf_or_empty("pipeline.storage.connection_string")
+    if conn_string_from_spark:
+        return {
+            "auth_type": "connection_string",
+            "credential": conn_string_from_spark,
+            "source": "spark_conf:pipeline.storage.connection_string",
+        }
 
-    storage_key_from_dfs_spark_hadoop_conf = get_spark_conf_or_empty(
-        f"spark.hadoop.fs.azure.account.key.{storage_account}.dfs.core.windows.net"
+    conn_scope = dbutils.widgets.get("p_storage_connection_string_secret_scope").strip()
+    conn_key = dbutils.widgets.get("p_storage_connection_string_secret_key").strip()
+    conn_string_from_secret = get_secret_or_empty(conn_scope, conn_key)
+    if conn_string_from_secret:
+        return {
+            "auth_type": "connection_string",
+            "credential": conn_string_from_secret,
+            "source": f"secret:{conn_scope}/{conn_key}",
+        }
+
+    conn_string_plain = dbutils.widgets.get("p_storage_connection_string").strip()
+    if conn_string_plain:
+        require_plaintext_opt_in("p_storage_connection_string")
+        return {
+            "auth_type": "connection_string",
+            "credential": conn_string_plain,
+            "source": "widget:p_storage_connection_string",
+        }
+
+    account_key_from_spark = get_spark_conf_or_empty("pipeline.storage.account_key")
+    if account_key_from_spark:
+        return {
+            "auth_type": "credential",
+            "credential": account_key_from_spark,
+            "credential_kind": "account_key",
+            "source": "spark_conf:pipeline.storage.account_key",
+        }
+
+    key_scope = dbutils.widgets.get("p_storage_secret_scope").strip()
+    key_name = dbutils.widgets.get("p_storage_secret_key").strip()
+    account_key_from_secret = get_secret_or_empty(key_scope, key_name)
+    if account_key_from_secret:
+        return {
+            "auth_type": "credential",
+            "credential": account_key_from_secret,
+            "credential_kind": "account_key",
+            "source": f"secret:{key_scope}/{key_name}",
+        }
+
+    account_key_plain = dbutils.widgets.get("p_storage_account_key").strip()
+    if account_key_plain:
+        require_plaintext_opt_in("p_storage_account_key")
+        return {
+            "auth_type": "credential",
+            "credential": account_key_plain,
+            "credential_kind": "account_key",
+            "source": "widget:p_storage_account_key",
+        }
+
+    sas_token_from_spark = get_spark_conf_or_empty("pipeline.storage.sas_token")
+    if sas_token_from_spark:
+        return {
+            "auth_type": "credential",
+            "credential": sas_token_from_spark,
+            "credential_kind": "sas_token",
+            "source": "spark_conf:pipeline.storage.sas_token",
+        }
+
+    sas_scope = dbutils.widgets.get("p_storage_sas_secret_scope").strip()
+    sas_key = dbutils.widgets.get("p_storage_sas_secret_key").strip()
+    sas_token_from_secret = get_secret_or_empty(sas_scope, sas_key)
+    if sas_token_from_secret:
+        return {
+            "auth_type": "credential",
+            "credential": sas_token_from_secret,
+            "credential_kind": "sas_token",
+            "source": f"secret:{sas_scope}/{sas_key}",
+        }
+
+    sas_token_plain = dbutils.widgets.get("p_storage_sas_token").strip()
+    if sas_token_plain:
+        require_plaintext_opt_in("p_storage_sas_token")
+        return {
+            "auth_type": "credential",
+            "credential": sas_token_plain,
+            "credential_kind": "sas_token",
+            "source": "widget:p_storage_sas_token",
+        }
+
+    raise ValueError(
+        "Missing storage auth. Use one of: "
+        "1) connection string via spark conf/secret, "
+        "2) account key via spark conf/secret, "
+        "3) SAS token via spark conf/secret."
     )
-    if storage_key_from_dfs_spark_hadoop_conf:
-        return (
-            storage_key_from_dfs_spark_hadoop_conf,
-            f"spark_conf:spark.hadoop.fs.azure.account.key.{storage_account}.dfs.core.windows.net",
-        )
-
-    storage_key_from_blob_spark_hadoop_conf = get_spark_conf_or_empty(
-        f"spark.hadoop.fs.azure.account.key.{storage_account}.blob.core.windows.net"
-    )
-    if storage_key_from_blob_spark_hadoop_conf:
-        return (
-            storage_key_from_blob_spark_hadoop_conf,
-            f"spark_conf:spark.hadoop.fs.azure.account.key.{storage_account}.blob.core.windows.net",
-        )
-
-    storage_key_from_dfs_conf = get_spark_conf_or_empty(
-        f"fs.azure.account.key.{storage_account}.dfs.core.windows.net"
-    )
-    if storage_key_from_dfs_conf:
-        return (
-            storage_key_from_dfs_conf,
-            f"spark_conf:fs.azure.account.key.{storage_account}.dfs.core.windows.net",
-        )
-
-    storage_key_from_blob_conf = get_spark_conf_or_empty(
-        f"fs.azure.account.key.{storage_account}.blob.core.windows.net"
-    )
-    if storage_key_from_blob_conf:
-        return (
-            storage_key_from_blob_conf,
-            f"spark_conf:fs.azure.account.key.{storage_account}.blob.core.windows.net",
-        )
-
-    secret_scope = dbutils.widgets.get("p_storage_secret_scope").strip()
-    secret_key = dbutils.widgets.get("p_storage_secret_key").strip()
-    if secret_scope and secret_key:
-        return (
-            dbutils.secrets.get(secret_scope, secret_key),
-            f"secret:{secret_scope}/{secret_key}",
-        )
-
-    plain_storage_key = dbutils.widgets.get("p_storage_account_key").strip()
-    if plain_storage_key:
-        if not allow_plain:
-            raise ValueError(
-                "p_storage_account_key was provided but p_allow_plaintext_credentials=false. "
-                "Use Job spark conf (pipeline.storage.account_key) or secret scope/key widgets."
-            )
-        return plain_storage_key, "widget:p_storage_account_key"
-
-    return "", "not_provided"
 
 
 def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
     ensure_base_widgets()
 
-    storage_protocol = dbutils.widgets.get("p_storage_protocol").strip().lower() or "abfss"
     storage_account = dbutils.widgets.get("p_storage_account").strip()
     container = dbutils.widgets.get("p_container").strip()
-    base_url = dbutils.widgets.get("p_openweather_base_url").strip().rstrip("/")
-    endpoints = parse_list(dbutils.widgets.get("p_openweather_endpoints").strip(), ",")
-    units = dbutils.widgets.get("p_openweather_units").strip() or "metric"
-    lang = dbutils.widgets.get("p_openweather_lang").strip() or "pt_br"
-    timeout_seconds = int(dbutils.widgets.get("p_openweather_timeout_seconds").strip())
-    cities = parse_list(dbutils.widgets.get("p_cities").strip(), ";")
-
     if not storage_account:
         raise ValueError("Widget p_storage_account is required.")
     if not container:
         raise ValueError("Widget p_container is required.")
-    if storage_protocol not in {"abfss", "wasbs"}:
-        raise ValueError("Widget p_storage_protocol must be either 'abfss' or 'wasbs'.")
-    if not endpoints:
-        raise ValueError("Widget p_openweather_endpoints must contain at least one endpoint.")
-    if not cities:
-        raise ValueError("Widget p_cities must contain at least one city.")
 
-    storage_endpoint = (
-        "dfs.core.windows.net" if storage_protocol == "abfss" else "blob.core.windows.net"
-    )
     api_key, api_key_source = resolve_openweather_api_key(require_api_key=require_api_key)
-    storage_account_key, storage_key_source = resolve_storage_account_key(storage_account)
-    base_uri = f"{storage_protocol}://{container}@{storage_account}.{storage_endpoint}"
+    storage_auth = resolve_storage_auth()
     return {
-        "storage_protocol": storage_protocol,
-        "storage_endpoint": storage_endpoint,
         "storage_account": storage_account,
-        "storage_account_key": storage_account_key,
-        "storage_key_source": storage_key_source,
         "container": container,
-        "base_uri": base_uri,
-        "openweather_base_url": base_url,
-        "openweather_endpoints": endpoints,
-        "openweather_units": units,
-        "openweather_lang": lang,
-        "openweather_timeout_seconds": timeout_seconds,
-        "cities": cities,
+        "storage_account_url": f"https://{storage_account}.blob.core.windows.net",
+        "storage_auth": storage_auth,
+        "openweather_base_url": dbutils.widgets.get("p_openweather_base_url").strip().rstrip("/"),
+        "openweather_endpoints": parse_list(
+            dbutils.widgets.get("p_openweather_endpoints").strip(), ","
+        ),
+        "openweather_units": dbutils.widgets.get("p_openweather_units").strip() or "metric",
+        "openweather_lang": dbutils.widgets.get("p_openweather_lang").strip() or "pt_br",
+        "openweather_timeout_seconds": int(
+            dbutils.widgets.get("p_openweather_timeout_seconds").strip()
+        ),
+        "cities": parse_list(dbutils.widgets.get("p_cities").strip(), ";"),
         "openweather_api_key": api_key,
         "openweather_api_key_source": api_key_source,
     }
 
 
-def configure_storage_access(storage_account: str, storage_account_key: str) -> None:
-    if storage_account_key:
-        target_keys = [
-            f"spark.hadoop.fs.azure.account.key.{storage_account}.dfs.core.windows.net",
-            f"spark.hadoop.fs.azure.account.key.{storage_account}.blob.core.windows.net",
-            f"fs.azure.account.key.{storage_account}.dfs.core.windows.net",
-            f"fs.azure.account.key.{storage_account}.blob.core.windows.net",
-        ]
-        for config_key in target_keys:
-            try:
-                spark.conf.set(config_key, storage_account_key)
-            except Exception:
-                pass
+def build_blob_service_client(config: dict[str, Any]) -> BlobServiceClient:
+    storage_auth = config["storage_auth"]
+    if storage_auth["auth_type"] == "connection_string":
+        return BlobServiceClient.from_connection_string(storage_auth["credential"])
+    return BlobServiceClient(
+        account_url=config["storage_account_url"],
+        credential=storage_auth["credential"],
+    )
+
+
+def get_container_client(config: dict[str, Any], *, create_if_missing: bool) -> Any:
+    service_client = build_blob_service_client(config)
+    container_client = service_client.get_container_client(config["container"])
+    if create_if_missing:
+        try:
+            container_client.create_container()
+        except ResourceExistsError:
+            pass
+    return container_client
 
 
 # COMMAND ----------
@@ -378,17 +413,51 @@ def build_bronze_record(
     }
 
 
-def build_record_path(
+def bronze_to_silver_row(bronze_record: dict[str, Any]) -> dict[str, Any]:
+    observation_ts_utc = bronze_record.get("observation_ts_utc")
+    event_date = observation_ts_utc[:10] if observation_ts_utc else None
+    return {
+        "watermark_run_id": bronze_record.get("watermark_run_id"),
+        "watermark_ingestion_ts_utc": bronze_record.get("watermark_ingestion_ts_utc"),
+        "watermark_ingestion_epoch": bronze_record.get("watermark_ingestion_epoch"),
+        "watermark_source_epoch": bronze_record.get("watermark_source_epoch"),
+        "watermark_source_ts_utc": bronze_record.get("watermark_source_ts_utc"),
+        "event_date": event_date,
+        "city_id": bronze_record.get("city_id"),
+        "city_name": bronze_record.get("city_name"),
+        "country": bronze_record.get("country"),
+        "latitude": bronze_record.get("latitude"),
+        "longitude": bronze_record.get("longitude"),
+        "observation_epoch": bronze_record.get("observation_epoch"),
+        "observation_ts_utc": bronze_record.get("observation_ts_utc"),
+        "timezone_offset_seconds": bronze_record.get("timezone_offset_seconds"),
+        "weather_main": bronze_record.get("weather_main"),
+        "weather_description": bronze_record.get("weather_description"),
+        "temperature_celsius": bronze_record.get("temperature_celsius"),
+        "feels_like_celsius": bronze_record.get("feels_like_celsius"),
+        "temp_min_celsius": bronze_record.get("temp_min_celsius"),
+        "temp_max_celsius": bronze_record.get("temp_max_celsius"),
+        "pressure_hpa": bronze_record.get("pressure_hpa"),
+        "humidity_pct": bronze_record.get("humidity_pct"),
+        "wind_speed_ms": bronze_record.get("wind_speed_ms"),
+        "wind_deg": bronze_record.get("wind_deg"),
+        "cloudiness_pct": bronze_record.get("cloudiness_pct"),
+        "sunrise_ts_utc": bronze_record.get("sunrise_ts_utc"),
+        "sunset_ts_utc": bronze_record.get("sunset_ts_utc"),
+    }
+
+
+def build_record_blob_path(
     *,
-    base_uri: str,
     layer: str,
     endpoint: str,
-    city_slug: str,
+    city_query: str,
     watermark: dict[str, Any],
     extension: str,
 ) -> str:
+    city_slug = slugify_city(city_query)
     return (
-        f"{base_uri}/{layer}/openweather/{endpoint}/"
+        f"{layer}/openweather/{endpoint}/"
         f"ingestion_date={watermark['ingestion_date']}/"
         f"ingestion_hour={watermark['ingestion_hour']}/"
         f"city={city_slug}/"
@@ -396,61 +465,145 @@ def build_record_path(
     )
 
 
-def write_json_document(path: str, payload: dict[str, Any], compact: bool = False) -> None:
+def build_dataset_blob_path(
+    *,
+    layer: str,
+    dataset: str,
+    run_id: str,
+    ingestion_date: str,
+    ingestion_hour: str,
+    extension: str,
+) -> str:
+    return (
+        f"{layer}/openweather/{dataset}/"
+        f"ingestion_date={ingestion_date}/"
+        f"ingestion_hour={ingestion_hour}/"
+        f"run_id={run_id}/"
+        f"part-00000.{extension}"
+    )
+
+
+def build_blob_metadata(layer: str, watermark: dict[str, Any]) -> dict[str, str]:
+    return {
+        "pipeline": "openweather_medallion_databricks",
+        "layer": layer,
+        "run_id": str(watermark.get("run_id", "")),
+        "ingestion_ts": str(watermark.get("ingestion_ts_utc", "")),
+        "ingestion_epoch": str(watermark.get("ingestion_epoch", "")),
+    }
+
+
+def upload_json_blob(
+    container_client: Any,
+    blob_path: str,
+    payload: dict[str, Any],
+    *,
+    compact: bool,
+    metadata: dict[str, str],
+) -> None:
     content = (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if compact
         else json.dumps(payload, ensure_ascii=False, indent=2)
+    ).encode("utf-8")
+    container_client.get_blob_client(blob_path).upload_blob(
+        content,
+        overwrite=True,
+        content_settings=ContentSettings(content_type="application/json"),
+        metadata=metadata,
     )
-    try:
-        dbutils.fs.put(path, content, True)
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to write JSON to path '{path}'. "
-            "Check storage protocol, container name, and storage credentials."
-        ) from exc
 
 
-def storage_preflight_check(config: dict[str, Any], watermark: dict[str, Any]) -> str:
+def download_json_blob(container_client: Any, blob_path: str) -> dict[str, Any]:
+    content = container_client.get_blob_client(blob_path).download_blob().readall()
+    return json.loads(content.decode("utf-8"))
+
+
+def upload_parquet_blob(
+    container_client: Any,
+    blob_path: str,
+    dataframe: pd.DataFrame,
+    *,
+    metadata: dict[str, str],
+) -> None:
+    output = BytesIO()
+    dataframe.to_parquet(output, index=False, engine="pyarrow")
+    container_client.get_blob_client(blob_path).upload_blob(
+        output.getvalue(),
+        overwrite=True,
+        content_settings=ContentSettings(content_type="application/octet-stream"),
+        metadata=metadata,
+    )
+
+
+def download_parquet_blob(container_client: Any, blob_path: str) -> pd.DataFrame:
+    data = container_client.get_blob_client(blob_path).download_blob().readall()
+    return pd.read_parquet(BytesIO(data))
+
+
+def list_blob_names(container_client: Any, prefix: str) -> list[str]:
+    return [blob.name for blob in container_client.list_blobs(name_starts_with=prefix)]
+
+
+def storage_preflight_check(
+    container_client: Any, config: dict[str, Any], watermark: dict[str, Any]
+) -> str:
     check_path = (
-        f"{config['base_uri']}/raw/openweather/_control/healthcheck/"
+        f"raw/openweather/_control/healthcheck/"
         f"run_id={watermark['run_id']}.json"
     )
     check_payload = {
         "status": "ok",
         "check": "storage_write",
-        "storage_protocol": config["storage_protocol"],
         "storage_account": config["storage_account"],
         "container": config["container"],
         "run_id": watermark["run_id"],
         "ingestion_ts_utc": watermark["ingestion_ts_utc"],
     }
-    write_json_document(check_path, check_payload, compact=False)
+    upload_json_blob(
+        container_client,
+        check_path,
+        check_payload,
+        compact=False,
+        metadata=build_blob_metadata("raw", watermark),
+    )
     return check_path
 
 
-def write_run_manifest(base_uri: str, manifest: dict[str, Any]) -> str:
+def write_run_manifest(container_client: Any, manifest: dict[str, Any]) -> str:
     manifest_path = (
-        f"{base_uri}/raw/openweather/_control/runs/"
+        "raw/openweather/_control/runs/"
         f"{manifest['ingestion_epoch']}_{manifest['run_id']}.json"
     )
-    write_json_document(manifest_path, manifest, compact=False)
+    upload_json_blob(
+        container_client,
+        manifest_path,
+        manifest,
+        compact=False,
+        metadata=build_blob_metadata(
+            "raw",
+            {
+                "run_id": manifest["run_id"],
+                "ingestion_ts_utc": manifest["ingestion_ts_utc"],
+                "ingestion_epoch": manifest["ingestion_epoch"],
+            },
+        ),
+    )
     return manifest_path
 
 
-def load_latest_run_manifest(base_uri: str) -> tuple[dict[str, Any], str]:
-    control_path = f"{base_uri}/raw/openweather/_control/runs"
-    entries = [entry for entry in dbutils.fs.ls(control_path) if entry.path.endswith(".json")]
-    if not entries:
-        raise ValueError(f"No run manifest found under {control_path}.")
-    latest_entry = max(entries, key=lambda entry: entry.modificationTime)
-    content = dbutils.fs.head(latest_entry.path, 2_000_000)
-    return json.loads(content), latest_entry.path
+def load_latest_run_manifest(container_client: Any) -> tuple[dict[str, Any], str]:
+    prefix = "raw/openweather/_control/runs/"
+    blobs = list(container_client.list_blobs(name_starts_with=prefix))
+    if not blobs:
+        raise ValueError(f"No run manifest found under prefix '{prefix}'.")
+    latest_blob = max(blobs, key=lambda blob: blob.last_modified)
+    return download_json_blob(container_client, latest_blob.name), latest_blob.name
 
 
 def resolve_run_context(
+    container_client: Any,
     *,
-    base_uri: str,
     run_id: str,
     ingestion_date: str,
     ingestion_hour: str,
@@ -463,7 +616,7 @@ def resolve_run_context(
             "source": "widgets",
         }
 
-    manifest, manifest_path = load_latest_run_manifest(base_uri)
+    manifest, manifest_path = load_latest_run_manifest(container_client)
     return {
         "run_id": manifest["run_id"],
         "ingestion_date": manifest["ingestion_date"],
@@ -471,3 +624,10 @@ def resolve_run_context(
         "source": "latest_manifest",
         "manifest_path": manifest_path,
     }
+
+
+def coerce_numeric_columns(dataframe: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    for column in columns:
+        if column in dataframe.columns:
+            dataframe[column] = pd.to_numeric(dataframe[column], errors="coerce")
+    return dataframe
