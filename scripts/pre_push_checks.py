@@ -20,6 +20,7 @@ COMPILE_TARGETS = [
     "notebooks/databricks/110_uc_governance_bootstrap.py",
     "notebooks/databricks/120_delta_backfill_from_bronze.py",
     "scripts/deploy_databricks_workspace.py",
+    "scripts/extract_databricks_run_summary.py",
     "src/settings.py",
     "src/openweather_client.py",
     "src/medallion_pipeline.py",
@@ -86,6 +87,36 @@ def check_forbidden_tracked_files() -> list[str]:
     return failures
 
 
+def check_untracked_root_html_exports() -> list[str]:
+    html_files = sorted(path.name for path in ROOT.glob("*.html") if path.is_file())
+    if not html_files:
+        return []
+    return [
+        "Databricks HTML export must not stay in repository root. "
+        f"Move to docs/evidence and keep only summary JSON: {', '.join(html_files)}"
+    ]
+
+
+def check_tracked_html_files() -> list[str]:
+    result = run_command(["git", "ls-files"])
+    if result.returncode != 0:
+        details = result.stderr.strip() or result.stdout.strip()
+        return [f"Failed to list tracked files for HTML validation: {details}"]
+
+    tracked_html = sorted(
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip().lower().endswith(".html")
+    )
+    if not tracked_html:
+        return []
+
+    return [
+        "Tracked HTML file detected. Avoid committing Databricks exports because they can contain secrets: "
+        + ", ".join(tracked_html)
+    ]
+
+
 def check_terraform_fmt_if_available() -> list[str]:
     terraform_binary = shutil.which("terraform")
     terraform_dir = ROOT / "infra" / "terraform"
@@ -108,6 +139,8 @@ def main() -> int:
     failures.extend(check_syntax())
     failures.extend(check_notebook_plaintext_credentials())
     failures.extend(check_forbidden_tracked_files())
+    failures.extend(check_untracked_root_html_exports())
+    failures.extend(check_tracked_html_files())
     failures.extend(check_terraform_fmt_if_available())
 
     if failures:
