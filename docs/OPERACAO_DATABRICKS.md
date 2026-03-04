@@ -47,6 +47,13 @@ Padronizar a operacao de producao usando somente o notebook:
 - `LOCAL_OVERRIDE_FILE = "config/databricks_free.local.json"`
 4. Rode manualmente e valide `quality_report.passed = true`.
 
+## Notebooks enterprise adicionais
+
+1. `110_uc_governance_bootstrap.py`:
+- cria catalog/schema/tabelas/views e grants de governanca
+2. `120_delta_backfill_from_bronze.py`:
+- executa backfill historico para Delta com MERGE idempotente
+
 ## Sinais de sucesso
 
 O notebook precisa retornar JSON com:

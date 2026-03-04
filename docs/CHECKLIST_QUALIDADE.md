@@ -17,12 +17,14 @@
 
 1. Validar que o notebook retornou `status = ok`.
 2. Validar `quality_report.passed = true`.
+3. Validar `sla_report.passed = true`.
 3. Validar contagens:
 - `raw_records`
 - `bronze_records`
 - `silver_rows`
 - `gold_rows`
 4. Validar `timings.total_seconds` dentro da janela esperada.
+5. Se Delta estiver ativo, validar `delta_report.enabled = true`.
 
 ## Depois da execucao
 
@@ -41,6 +43,7 @@ Uma execucao e considerada aprovada apenas quando:
 
 1. `status = ok`.
 2. `quality_report.passed = true`.
-3. `raw_records == bronze_records`.
-4. `silver_rows >= min_silver_rows`.
-5. `gold_rows >= min_gold_rows`.
+3. `sla_report.passed = true`.
+4. `raw_records == bronze_records`.
+5. `silver_rows >= min_silver_rows`.
+6. `gold_rows >= min_gold_rows`.
