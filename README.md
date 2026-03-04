@@ -58,6 +58,7 @@ Runbook operacional:
 - `docs/OPERACAO_DATABRICKS.md`
 - `docs/CHECKLIST_QUALIDADE.md`
 - `docs/GIT_VERSIONAMENTO.md`
+- `docs/CICD.md`
 
 ### 1. Secret scope
 

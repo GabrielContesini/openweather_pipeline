@@ -16,10 +16,13 @@ COMPILE_TARGETS = [
     "notebooks/databricks/02_silver_transform.py",
     "notebooks/databricks/03_gold_transform.py",
     "notebooks/databricks/98_full_pipeline_no_widgets.py",
+    "scripts/deploy_databricks_workspace.py",
     "src/settings.py",
     "src/openweather_client.py",
     "src/medallion_pipeline.py",
     "src/extract_data.py",
+    "tests/test_settings.py",
+    "tests/test_common_quality.py",
 ]
 
 FORBIDDEN_TRACKED_FILES = [

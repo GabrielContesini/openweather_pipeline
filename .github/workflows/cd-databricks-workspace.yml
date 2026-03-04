@@ -1,0 +1,56 @@
+name: cd-databricks-workspace
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - notebooks/databricks/**
+      - scripts/deploy_databricks_workspace.py
+      - .github/workflows/cd-databricks-workspace.yml
+
+jobs:
+  deploy-workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Validate secrets
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          if [ -z "$DATABRICKS_HOST" ]; then
+            echo "Missing GitHub secret: DATABRICKS_HOST"
+            exit 1
+          fi
+          if [ -z "$DATABRICKS_TOKEN" ]; then
+            echo "Missing GitHub secret: DATABRICKS_TOKEN"
+            exit 1
+          fi
+
+      - name: Deploy notebooks to Databricks Workspace
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_TARGET_PATH: ${{ vars.DATABRICKS_TARGET_PATH }}
+          DATABRICKS_SOURCE_DIR: notebooks/databricks
+        run: uv run python scripts/deploy_databricks_workspace.py
