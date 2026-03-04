@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 try:
     from azure.core.exceptions import ResourceExistsError
@@ -236,21 +239,174 @@ def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
 
     api_key, api_key_source = resolve_openweather_api_key(require_api_key=require_api_key)
     storage_auth = resolve_storage_auth()
+    openweather_endpoints = parse_list(
+        dbutils.widgets.get("p_openweather_endpoints").strip(), ","
+    )
+    if not openweather_endpoints:
+        raise ValueError(
+            "Widget p_openweather_endpoints is required and must contain at least one endpoint."
+        )
+
+    cities = parse_list(dbutils.widgets.get("p_cities").strip(), ";")
+    if not cities:
+        raise ValueError("Widget p_cities is required and must contain at least one city.")
+
+    timeout_seconds = int(dbutils.widgets.get("p_openweather_timeout_seconds").strip())
+    if timeout_seconds <= 0:
+        raise ValueError("Widget p_openweather_timeout_seconds must be greater than zero.")
+
     return {
         "storage_account": storage_account,
         "container": container,
         "storage_account_url": f"https://{storage_account}.blob.core.windows.net",
         "storage_auth": storage_auth,
         "openweather_base_url": dbutils.widgets.get("p_openweather_base_url").strip().rstrip("/"),
-        "openweather_endpoints": parse_list(
-            dbutils.widgets.get("p_openweather_endpoints").strip(), ","
-        ),
+        "openweather_endpoints": openweather_endpoints,
         "openweather_units": dbutils.widgets.get("p_openweather_units").strip() or "metric",
         "openweather_lang": dbutils.widgets.get("p_openweather_lang").strip() or "pt_br",
-        "openweather_timeout_seconds": int(
-            dbutils.widgets.get("p_openweather_timeout_seconds").strip()
-        ),
-        "cities": parse_list(dbutils.widgets.get("p_cities").strip(), ";"),
+        "openweather_timeout_seconds": timeout_seconds,
+        "cities": cities,
+        "openweather_api_key": api_key,
+        "openweather_api_key_source": api_key_source,
+    }
+
+
+def _is_placeholder(value: str | None) -> bool:
+    if value is None:
+        return True
+    trimmed = value.strip()
+    return not trimmed or (trimmed.startswith("<") and trimmed.endswith(">"))
+
+
+def _parse_secret_uri(secret_uri: str) -> tuple[str, str]:
+    # Format: secret://<scope>/<key>
+    if not secret_uri.startswith("secret://"):
+        raise ValueError(
+            "Invalid secret uri format. Expected 'secret://<scope>/<key>'."
+        )
+    raw_ref = secret_uri[len("secret://") :]
+    parts = raw_ref.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(
+            "Invalid secret uri format. Expected 'secret://<scope>/<key>'."
+        )
+    return parts[0], parts[1]
+
+
+def resolve_manual_secret_or_plaintext(
+    value: str,
+    *,
+    value_name: str,
+    allow_plaintext: bool,
+) -> tuple[str, str]:
+    if _is_placeholder(value):
+        raise ValueError(
+            f"Missing value for {value_name}. Use plaintext or secret://<scope>/<key>."
+        )
+
+    trimmed = value.strip()
+    if trimmed.startswith("secret://"):
+        scope, key = _parse_secret_uri(trimmed)
+        return dbutils.secrets.get(scope, key), f"secret:{scope}/{key}"
+
+    if not allow_plaintext:
+        raise ValueError(
+            f"Plaintext value for {value_name} is blocked. "
+            "Use secret://<scope>/<key> or enable allow_plaintext_credentials."
+        )
+
+    return trimmed, "manual:plaintext"
+
+
+def build_runtime_config_from_manual_input(
+    manual_config: dict[str, Any], *, allow_plaintext_credentials: bool
+) -> dict[str, Any]:
+    required_non_secret_keys = [
+        "storage_account",
+        "container",
+        "openweather_base_url",
+        "openweather_endpoints",
+        "openweather_units",
+        "openweather_lang",
+        "openweather_timeout_seconds",
+        "cities",
+        "openweather_api_key",
+    ]
+    missing_keys = [key for key in required_non_secret_keys if key not in manual_config]
+    if missing_keys:
+        raise ValueError(
+            f"Missing keys in manual_config: {', '.join(sorted(missing_keys))}"
+        )
+
+    storage_account = str(manual_config["storage_account"]).strip()
+    container = str(manual_config["container"]).strip()
+    if not storage_account:
+        raise ValueError("manual_config.storage_account is required.")
+    if not container:
+        raise ValueError("manual_config.container is required.")
+
+    api_key, api_key_source = resolve_manual_secret_or_plaintext(
+        str(manual_config["openweather_api_key"]),
+        value_name="openweather_api_key",
+        allow_plaintext=allow_plaintext_credentials,
+    )
+
+    auth_mode = str(manual_config.get("storage_auth_mode", "account_key")).strip().lower()
+    storage_credential_ref = str(
+        manual_config.get("storage_credential", manual_config.get("storage_account_key", ""))
+    )
+    storage_credential, storage_credential_source = resolve_manual_secret_or_plaintext(
+        storage_credential_ref,
+        value_name="storage_credential",
+        allow_plaintext=allow_plaintext_credentials,
+    )
+
+    if auth_mode == "connection_string":
+        storage_auth = {
+            "auth_type": "connection_string",
+            "credential": storage_credential,
+            "source": storage_credential_source,
+        }
+    elif auth_mode in {"account_key", "sas_token"}:
+        storage_auth = {
+            "auth_type": "credential",
+            "credential": storage_credential,
+            "credential_kind": auth_mode,
+            "source": storage_credential_source,
+        }
+    else:
+        raise ValueError(
+            "manual_config.storage_auth_mode must be one of: "
+            "'account_key', 'connection_string', 'sas_token'."
+        )
+
+    endpoints = manual_config["openweather_endpoints"]
+    if isinstance(endpoints, str):
+        endpoints = [item.strip() for item in endpoints.split(",") if item.strip()]
+    if not endpoints:
+        raise ValueError("manual_config.openweather_endpoints must have at least one endpoint.")
+
+    cities = manual_config["cities"]
+    if isinstance(cities, str):
+        cities = [item.strip() for item in cities.split(";") if item.strip()]
+    if not cities:
+        raise ValueError("manual_config.cities must have at least one city.")
+
+    timeout_seconds = int(manual_config["openweather_timeout_seconds"])
+    if timeout_seconds <= 0:
+        raise ValueError("manual_config.openweather_timeout_seconds must be greater than zero.")
+
+    return {
+        "storage_account": storage_account,
+        "container": container,
+        "storage_account_url": f"https://{storage_account}.blob.core.windows.net",
+        "storage_auth": storage_auth,
+        "openweather_base_url": str(manual_config["openweather_base_url"]).strip().rstrip("/"),
+        "openweather_endpoints": endpoints,
+        "openweather_units": str(manual_config["openweather_units"]).strip() or "metric",
+        "openweather_lang": str(manual_config["openweather_lang"]).strip() or "pt_br",
+        "openweather_timeout_seconds": timeout_seconds,
+        "cities": cities,
         "openweather_api_key": api_key,
         "openweather_api_key_source": api_key_source,
     }
@@ -319,7 +475,33 @@ def epoch_to_iso_utc(epoch_value: Any) -> str | None:
     )
 
 
-def fetch_openweather_payload(config: dict[str, Any], endpoint: str, city: str) -> dict[str, Any]:
+def build_openweather_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=1.0,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["GET"]),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update({"User-Agent": "openweather-medallion-pipeline/1.0"})
+    return session
+
+
+def fetch_openweather_payload(
+    config: dict[str, Any],
+    endpoint: str,
+    city: str,
+    *,
+    session: requests.Session | None = None,
+) -> dict[str, Any]:
     url = f"{config['openweather_base_url']}/{endpoint}"
     params = {
         "q": city,
@@ -327,8 +509,23 @@ def fetch_openweather_payload(config: dict[str, Any], endpoint: str, city: str) 
         "units": config["openweather_units"],
         "lang": config["openweather_lang"],
     }
-    response = requests.get(url, params=params, timeout=config["openweather_timeout_seconds"])
-    payload = response.json()
+
+    request_client = session or requests
+    try:
+        response = request_client.get(
+            url,
+            params=params,
+            timeout=config["openweather_timeout_seconds"],
+        )
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(
+            f"OpenWeather request failure for endpoint={endpoint}, city={city}: {exc}"
+        ) from exc
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {"message": response.text[:500]}
     if response.status_code >= 400:
         error_message = payload.get("message", "unknown error")
         raise RuntimeError(
@@ -632,6 +829,221 @@ def coerce_numeric_columns(dataframe: pd.DataFrame, columns: list[str]) -> pd.Da
         if column in dataframe.columns:
             dataframe[column] = pd.to_numeric(dataframe[column], errors="coerce")
     return dataframe
+
+
+def run_full_pipeline(
+    config: dict[str, Any],
+    *,
+    stage_name: str,
+    create_container_if_missing: bool = True,
+) -> dict[str, Any]:
+    pipeline_started = time.perf_counter()
+    container_client = get_container_client(
+        config, create_if_missing=create_container_if_missing
+    )
+    watermark = build_watermark()
+    preflight_path = storage_preflight_check(container_client, config, watermark)
+
+    raw_records = 0
+    bronze_records = 0
+    bronze_records_cache: list[dict[str, Any]] = []
+
+    extract_started = time.perf_counter()
+    openweather_session = build_openweather_session()
+    try:
+        for endpoint in config["openweather_endpoints"]:
+            for city in config["cities"]:
+                response = fetch_openweather_payload(
+                    config,
+                    endpoint,
+                    city,
+                    session=openweather_session,
+                )
+                payload = response["payload"]
+
+                raw_record = build_raw_record(
+                    endpoint=endpoint,
+                    city_query=city,
+                    status_code=response["status_code"],
+                    request_url=response["request_url"],
+                    payload=payload,
+                    watermark=watermark,
+                )
+                raw_path = build_record_blob_path(
+                    layer="raw",
+                    endpoint=endpoint,
+                    city_query=city,
+                    watermark=watermark,
+                    extension="json",
+                )
+                upload_json_blob(
+                    container_client,
+                    raw_path,
+                    raw_record,
+                    compact=False,
+                    metadata=build_blob_metadata("raw", watermark),
+                )
+                raw_records += 1
+
+                bronze_record = build_bronze_record(
+                    endpoint=endpoint,
+                    city_query=city,
+                    payload=payload,
+                    watermark=watermark,
+                )
+                bronze_path = build_record_blob_path(
+                    layer="bronze",
+                    endpoint=endpoint,
+                    city_query=city,
+                    watermark=watermark,
+                    extension="json",
+                )
+                upload_json_blob(
+                    container_client,
+                    bronze_path,
+                    bronze_record,
+                    compact=True,
+                    metadata=build_blob_metadata("bronze", watermark),
+                )
+                bronze_records += 1
+                bronze_records_cache.append(bronze_record)
+    finally:
+        openweather_session.close()
+    extract_seconds = round(time.perf_counter() - extract_started, 3)
+
+    if not bronze_records_cache:
+        raise ValueError("No bronze records produced; cannot proceed to silver/gold.")
+
+    silver_started = time.perf_counter()
+    silver_rows = [bronze_to_silver_row(record) for record in bronze_records_cache]
+    silver_df = pd.DataFrame(silver_rows)
+    silver_df = coerce_numeric_columns(
+        silver_df,
+        [
+            "watermark_ingestion_epoch",
+            "watermark_source_epoch",
+            "city_id",
+            "latitude",
+            "longitude",
+            "observation_epoch",
+            "timezone_offset_seconds",
+            "temperature_celsius",
+            "feels_like_celsius",
+            "temp_min_celsius",
+            "temp_max_celsius",
+            "pressure_hpa",
+            "humidity_pct",
+            "wind_speed_ms",
+            "wind_deg",
+            "cloudiness_pct",
+        ],
+    )
+    silver_blob_path = build_dataset_blob_path(
+        layer="silver",
+        dataset="openweather_current_weather",
+        run_id=watermark["run_id"],
+        ingestion_date=watermark["ingestion_date"],
+        ingestion_hour=watermark["ingestion_hour"],
+        extension="parquet",
+    )
+    upload_parquet_blob(
+        container_client,
+        silver_blob_path,
+        silver_df,
+        metadata=build_blob_metadata("silver", watermark),
+    )
+    silver_seconds = round(time.perf_counter() - silver_started, 3)
+
+    gold_started = time.perf_counter()
+    source_max_epoch = pd.to_numeric(silver_df["observation_epoch"], errors="coerce").max()
+    source_max_epoch = int(source_max_epoch) if pd.notna(source_max_epoch) else None
+
+    gold_df = (
+        silver_df.groupby(["event_date", "city_name", "country"], dropna=False)
+        .agg(
+            records_count=("city_id", "count"),
+            temperature_avg_celsius=("temperature_celsius", "mean"),
+            temperature_min_celsius=("temp_min_celsius", "min"),
+            temperature_max_celsius=("temp_max_celsius", "max"),
+            humidity_avg_pct=("humidity_pct", "mean"),
+            wind_speed_avg_ms=("wind_speed_ms", "mean"),
+            last_observation_ts_utc=("observation_ts_utc", "max"),
+        )
+        .reset_index()
+    )
+    gold_df["watermark_run_id"] = watermark["run_id"]
+    gold_df["watermark_ingestion_ts_utc"] = watermark["ingestion_ts_utc"]
+    gold_df["watermark_ingestion_epoch"] = watermark["ingestion_epoch"]
+    gold_df["watermark_source_max_epoch"] = source_max_epoch
+    gold_df["watermark_source_max_ts_utc"] = epoch_to_iso_utc(source_max_epoch)
+
+    gold_blob_path = build_dataset_blob_path(
+        layer="gold",
+        dataset="weather_city_daily_snapshot",
+        run_id=watermark["run_id"],
+        ingestion_date=watermark["ingestion_date"],
+        ingestion_hour=watermark["ingestion_hour"],
+        extension="parquet",
+    )
+    upload_parquet_blob(
+        container_client,
+        gold_blob_path,
+        gold_df,
+        metadata=build_blob_metadata("gold", watermark),
+    )
+    gold_seconds = round(time.perf_counter() - gold_started, 3)
+
+    manifest = {
+        "run_id": watermark["run_id"],
+        "ingestion_ts_utc": watermark["ingestion_ts_utc"],
+        "ingestion_epoch": watermark["ingestion_epoch"],
+        "ingestion_date": watermark["ingestion_date"],
+        "ingestion_hour": watermark["ingestion_hour"],
+        "container": config["container"],
+        "storage_account": config["storage_account"],
+        "cities": config["cities"],
+        "openweather_endpoints": config["openweather_endpoints"],
+        "openweather_api_key_source": config["openweather_api_key_source"],
+        "storage_auth_source": config["storage_auth"]["source"],
+        "raw_records": raw_records,
+        "bronze_records": bronze_records,
+        "silver_rows": len(silver_df),
+        "gold_rows": len(gold_df),
+        "storage_preflight_path": preflight_path,
+        "silver_blob_path": silver_blob_path,
+        "gold_blob_path": gold_blob_path,
+        "timings": {
+            "extract_seconds": extract_seconds,
+            "silver_seconds": silver_seconds,
+            "gold_seconds": gold_seconds,
+        },
+    }
+    manifest_path = write_run_manifest(container_client, manifest)
+    total_seconds = round(time.perf_counter() - pipeline_started, 3)
+
+    return {
+        "status": "ok",
+        "stage": stage_name,
+        "run_id": watermark["run_id"],
+        "ingestion_date": watermark["ingestion_date"],
+        "ingestion_hour": watermark["ingestion_hour"],
+        "raw_records": raw_records,
+        "bronze_records": bronze_records,
+        "silver_rows": len(silver_df),
+        "gold_rows": len(gold_df),
+        "storage_preflight_path": preflight_path,
+        "silver_blob_path": silver_blob_path,
+        "gold_blob_path": gold_blob_path,
+        "manifest_path": manifest_path,
+        "openweather_api_key_source": config["openweather_api_key_source"],
+        "storage_auth_source": config["storage_auth"]["source"],
+        "timings": {
+            "extract_seconds": extract_seconds,
+            "silver_seconds": silver_seconds,
+            "gold_seconds": gold_seconds,
+            "total_seconds": total_seconds,
+        },
+    }
 
 
 def stage_success(payload: dict[str, Any]) -> None:

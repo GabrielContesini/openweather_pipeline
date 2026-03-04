@@ -19,7 +19,16 @@ try:
 
     endpoint = config["openweather_endpoints"][0]
     city = config["cities"][0]
-    api_response = fetch_openweather_payload(config, endpoint, city)
+    openweather_session = build_openweather_session()
+    try:
+        api_response = fetch_openweather_payload(
+            config,
+            endpoint,
+            city,
+            session=openweather_session,
+        )
+    finally:
+        openweather_session.close()
 
     output_payload = {
         "status": "ok",

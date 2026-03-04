@@ -23,56 +23,65 @@ try:
     raw_records = 0
     bronze_records = 0
 
-    for endpoint in config["openweather_endpoints"]:
-        for city in config["cities"]:
-            response = fetch_openweather_payload(config, endpoint, city)
-            payload = response["payload"]
+    openweather_session = build_openweather_session()
+    try:
+        for endpoint in config["openweather_endpoints"]:
+            for city in config["cities"]:
+                response = fetch_openweather_payload(
+                    config,
+                    endpoint,
+                    city,
+                    session=openweather_session,
+                )
+                payload = response["payload"]
 
-            raw_record = build_raw_record(
-                endpoint=endpoint,
-                city_query=city,
-                status_code=response["status_code"],
-                request_url=response["request_url"],
-                payload=payload,
-                watermark=watermark,
-            )
-            raw_path = build_record_blob_path(
-                layer="raw",
-                endpoint=endpoint,
-                city_query=city,
-                watermark=watermark,
-                extension="json",
-            )
-            upload_json_blob(
-                container_client,
-                raw_path,
-                raw_record,
-                compact=False,
-                metadata=build_blob_metadata("raw", watermark),
-            )
-            raw_records += 1
+                raw_record = build_raw_record(
+                    endpoint=endpoint,
+                    city_query=city,
+                    status_code=response["status_code"],
+                    request_url=response["request_url"],
+                    payload=payload,
+                    watermark=watermark,
+                )
+                raw_path = build_record_blob_path(
+                    layer="raw",
+                    endpoint=endpoint,
+                    city_query=city,
+                    watermark=watermark,
+                    extension="json",
+                )
+                upload_json_blob(
+                    container_client,
+                    raw_path,
+                    raw_record,
+                    compact=False,
+                    metadata=build_blob_metadata("raw", watermark),
+                )
+                raw_records += 1
 
-            bronze_record = build_bronze_record(
-                endpoint=endpoint,
-                city_query=city,
-                payload=payload,
-                watermark=watermark,
-            )
-            bronze_path = build_record_blob_path(
-                layer="bronze",
-                endpoint=endpoint,
-                city_query=city,
-                watermark=watermark,
-                extension="json",
-            )
-            upload_json_blob(
-                container_client,
-                bronze_path,
-                bronze_record,
-                compact=True,
-                metadata=build_blob_metadata("bronze", watermark),
-            )
-            bronze_records += 1
+                bronze_record = build_bronze_record(
+                    endpoint=endpoint,
+                    city_query=city,
+                    payload=payload,
+                    watermark=watermark,
+                )
+                bronze_path = build_record_blob_path(
+                    layer="bronze",
+                    endpoint=endpoint,
+                    city_query=city,
+                    watermark=watermark,
+                    extension="json",
+                )
+                upload_json_blob(
+                    container_client,
+                    bronze_path,
+                    bronze_record,
+                    compact=True,
+                    metadata=build_blob_metadata("bronze", watermark),
+                )
+                bronze_records += 1
+    finally:
+        openweather_session.close()
 
     manifest = {
         "run_id": watermark["run_id"],
