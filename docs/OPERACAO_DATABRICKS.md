@@ -8,35 +8,31 @@ Padronizar a operacao de producao usando somente o notebook:
 
 ## Pre-requisitos
 
-1. Para `prod_secret_scope`: secret scope criado no Databricks (exemplo: `kv-openweather`).
-2. Para `prod_secret_scope`: secrets criados:
-- `openweather-api-key`
-- `storage-account-key`
-3. Para `free_plaintext_local`: arquivo local `config/databricks_free.local.json`.
-4. Container existente no Azure Blob (`openweather-data`).
+1. Databricks Free workspace com notebook `98`.
+2. Arquivo local `config/databricks_free.local.json` com chaves reais.
+3. Container existente no Azure Blob (`openweather-data`).
 
 ## Primeira execucao manual
 
 1. Abra o notebook `98_full_pipeline_no_widgets.py`.
-2. Defina `ACTIVE_PROFILE`.
-3. Ajuste o bloco do profile em `PIPELINE_PROFILES`.
-4. Use `secret://<scope>/<key>` para credenciais em producao.
-5. Se estiver em Databricks Free, use `free_plaintext_local` com arquivo local ignorado no Git.
-6. Opcional: defina `LOCAL_OVERRIDE_FILE = "config/databricks_free.local.json"`.
-7. Rode `Run all`.
-8. Valide o JSON final com `status = ok`.
+2. Defina `ACTIVE_PROFILE = "free_plaintext_local"`.
+3. Defina `LOCAL_OVERRIDE_FILE = "config/databricks_free.local.json"`.
+4. Rode `Run all`.
+5. Valide o JSON final com:
+- `status = ok`
+- `quality_report.passed = true`
+- `sla_report.passed = true`
 
 ## Configuracao de Job (producao)
 
 1. Job name: `job_openweather_medallion_prd`.
 2. Task type: Notebook.
 3. Notebook path: `.../98_full_pipeline_no_widgets`.
-4. Compute: Serverless.
-5. Retries: 2 ou 3.
-6. Timeout: 30 min.
-7. Schedule inicial: a cada 6 horas.
-8. `max_concurrent_runs = 1`.
-9. Task `Parameters`: deixar vazio (notebook no-widget).
+4. Retries: 2 ou 3.
+5. Timeout: 30 min.
+6. Schedule inicial: a cada 6 horas.
+7. `max_concurrent_runs = 1`.
+8. Task `Parameters`: deixar vazio (notebook no-widget).
 
 ## Databricks Free Edition
 
@@ -50,7 +46,8 @@ Padronizar a operacao de producao usando somente o notebook:
 ## Notebooks enterprise adicionais
 
 1. `110_uc_governance_bootstrap.py`:
-- cria catalog/schema/tabelas/views e grants de governanca
+- opcional para workspace pago com Unity Catalog
+- no Free, pode retornar `result = skipped`
 2. `120_delta_backfill_from_bronze.py`:
 - executa backfill historico para Delta com MERGE idempotente
 

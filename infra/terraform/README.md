@@ -36,8 +36,9 @@ terraform apply -var-file=terraform.tfvars
 
 1. Copy `terraform.tfvars.example` to `terraform.tfvars`.
 2. Keep `create_storage_resources = false` to avoid recreating existing storage.
-3. Fill `databricks_workspace_id` to enable Databricks diagnostics.
-4. Set a real email in `alert_email_receiver`.
+3. For Databricks Free, keep `enable_databricks_diagnostics = false`.
+4. If you have Azure Databricks paid workspace, fill `databricks_workspace_id` and enable diagnostics.
+5. Set a real email in `alert_email_receiver`.
 
 ## Notes
 

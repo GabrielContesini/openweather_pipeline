@@ -62,7 +62,7 @@ PIPELINE_PROFILES = {
             "delta_config": {
                 "enabled": True,
                 "catalog": "",
-                "schema": "weather_dev",
+                "schema": "default",
                 "silver_table": "openweather_current_weather_delta",
                 "gold_table": "weather_city_daily_snapshot_delta",
                 "checkpoint_table": "openweather_pipeline_checkpoint",

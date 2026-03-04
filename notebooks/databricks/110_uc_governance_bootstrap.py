@@ -44,6 +44,20 @@ def safe_execute(sql_text: str, *, errors: list[str]) -> None:
         errors.append(f"{sql_text} -> {type(exc).__name__}: {exc}")
 
 
+def is_uc_unavailable_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    patterns = [
+        "unity catalog",
+        "create catalog",
+        "insufficient privileges",
+        "permission denied",
+        "unsupported",
+        "catalog is not enabled",
+        "feature is not available",
+    ]
+    return any(pattern in message for pattern in patterns)
+
+
 errors: list[str] = []
 warnings: list[str] = []
 
@@ -193,12 +207,25 @@ SELECT * FROM {gold_table_fqn}
     }
     stage_success(output_payload)
 except Exception as exc:
-    stage_error(
-        "uc_governance_bootstrap",
-        exc,
-        context={
-            "uc_settings": UC_SETTINGS,
-            "errors": errors,
-            "warnings": warnings,
-        },
-    )
+    if is_uc_unavailable_error(exc):
+        stage_success(
+            {
+                "status": "ok",
+                "stage": "uc_governance_bootstrap",
+                "result": "skipped",
+                "reason": "Unity Catalog not available in this workspace plan or permissions.",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "uc_settings": UC_SETTINGS,
+            }
+        )
+    else:
+        stage_error(
+            "uc_governance_bootstrap",
+            exc,
+            context={
+                "uc_settings": UC_SETTINGS,
+                "errors": errors,
+                "warnings": warnings,
+            },
+        )
