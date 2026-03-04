@@ -8,19 +8,23 @@ Padronizar a operacao de producao usando somente o notebook:
 
 ## Pre-requisitos
 
-1. Secret scope criado no Databricks (exemplo: `kv-openweather`).
-2. Secrets criados:
+1. Para `prod_secret_scope`: secret scope criado no Databricks (exemplo: `kv-openweather`).
+2. Para `prod_secret_scope`: secrets criados:
 - `openweather-api-key`
 - `storage-account-key`
-3. Container existente no Azure Blob (`openweather-data`).
+3. Para `free_plaintext_local`: arquivo local `config/databricks_free.local.json`.
+4. Container existente no Azure Blob (`openweather-data`).
 
 ## Primeira execucao manual
 
 1. Abra o notebook `98_full_pipeline_no_widgets.py`.
-2. Ajuste apenas a celula `PIPELINE_SETTINGS`.
-3. Use `secret://<scope>/<key>` para credenciais.
-4. Rode `Run all`.
-5. Valide o JSON final com `status = ok`.
+2. Defina `ACTIVE_PROFILE`.
+3. Ajuste o bloco do profile em `PIPELINE_PROFILES`.
+4. Use `secret://<scope>/<key>` para credenciais em producao.
+5. Se estiver em Databricks Free, use `free_plaintext_local` com arquivo local ignorado no Git.
+6. Opcional: defina `LOCAL_OVERRIDE_FILE = "config/databricks_free.local.json"`.
+7. Rode `Run all`.
+8. Valide o JSON final com `status = ok`.
 
 ## Configuracao de Job (producao)
 
@@ -34,6 +38,15 @@ Padronizar a operacao de producao usando somente o notebook:
 8. `max_concurrent_runs = 1`.
 9. Task `Parameters`: deixar vazio (notebook no-widget).
 
+## Databricks Free Edition
+
+1. Copie `config/databricks_free.local.example.json` para `config/databricks_free.local.json`.
+2. Preencha as chaves reais no arquivo local.
+3. No notebook 98, use:
+- `ACTIVE_PROFILE = "free_plaintext_local"`
+- `LOCAL_OVERRIDE_FILE = "config/databricks_free.local.json"`
+4. Rode manualmente e valide `quality_report.passed = true`.
+
 ## Sinais de sucesso
 
 O notebook precisa retornar JSON com:
@@ -43,6 +56,7 @@ O notebook precisa retornar JSON com:
 - `raw_records`, `bronze_records`, `silver_rows`, `gold_rows`
 - `manifest_path`
 - `timings.total_seconds`
+- `quality_report.passed`
 
 ## Troubleshooting rapido
 

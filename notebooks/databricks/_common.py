@@ -227,6 +227,26 @@ def resolve_storage_auth() -> dict[str, str]:
     )
 
 
+def build_quality_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
+    if raw_rules is None:
+        raw_rules = {}
+    if not isinstance(raw_rules, dict):
+        raise ValueError("quality_rules must be a dictionary.")
+
+    rules = {
+        "enforce_exact_input_count": bool(raw_rules.get("enforce_exact_input_count", True)),
+        "min_silver_rows": int(raw_rules.get("min_silver_rows", 1)),
+        "min_gold_rows": int(raw_rules.get("min_gold_rows", 1)),
+    }
+
+    if rules["min_silver_rows"] < 1:
+        raise ValueError("quality_rules.min_silver_rows must be >= 1.")
+    if rules["min_gold_rows"] < 1:
+        raise ValueError("quality_rules.min_gold_rows must be >= 1.")
+
+    return rules
+
+
 def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
     ensure_base_widgets()
 
@@ -268,6 +288,7 @@ def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
         "cities": cities,
         "openweather_api_key": api_key,
         "openweather_api_key_source": api_key_source,
+        "quality_rules": build_quality_rules(None),
     }
 
 
@@ -409,6 +430,7 @@ def build_runtime_config_from_manual_input(
         "cities": cities,
         "openweather_api_key": api_key,
         "openweather_api_key_source": api_key_source,
+        "quality_rules": build_quality_rules(manual_config.get("quality_rules")),
     }
 
 
@@ -831,6 +853,57 @@ def coerce_numeric_columns(dataframe: pd.DataFrame, columns: list[str]) -> pd.Da
     return dataframe
 
 
+def build_quality_report(
+    *,
+    quality_rules: dict[str, Any],
+    expected_raw_records: int,
+    raw_records: int,
+    bronze_records: int,
+    silver_rows: int,
+    gold_rows: int,
+) -> dict[str, Any]:
+    checks = [
+        {
+            "name": "bronze_equals_raw",
+            "passed": bronze_records == raw_records,
+            "actual": bronze_records,
+            "expected": raw_records,
+        },
+        {
+            "name": "silver_min_rows",
+            "passed": silver_rows >= int(quality_rules["min_silver_rows"]),
+            "actual": silver_rows,
+            "expected_min": int(quality_rules["min_silver_rows"]),
+        },
+        {
+            "name": "gold_min_rows",
+            "passed": gold_rows >= int(quality_rules["min_gold_rows"]),
+            "actual": gold_rows,
+            "expected_min": int(quality_rules["min_gold_rows"]),
+        },
+    ]
+
+    if bool(quality_rules.get("enforce_exact_input_count", True)):
+        checks.insert(
+            0,
+            {
+                "name": "raw_equals_expected_input",
+                "passed": raw_records == expected_raw_records,
+                "actual": raw_records,
+                "expected": expected_raw_records,
+            },
+        )
+
+    failed_checks = [check["name"] for check in checks if not check["passed"]]
+    quality_passed = not failed_checks
+    return {
+        "passed": quality_passed,
+        "expected_raw_records": expected_raw_records,
+        "checks": checks,
+        "failed_checks": failed_checks,
+    }
+
+
 def run_full_pipeline(
     config: dict[str, Any],
     *,
@@ -841,6 +914,8 @@ def run_full_pipeline(
     container_client = get_container_client(
         config, create_if_missing=create_container_if_missing
     )
+    quality_rules = build_quality_rules(config.get("quality_rules"))
+    expected_raw_records = len(config["openweather_endpoints"]) * len(config["cities"])
     watermark = build_watermark()
     preflight_path = storage_preflight_check(container_client, config, watermark)
 
@@ -1018,6 +1093,20 @@ def run_full_pipeline(
             "gold_seconds": gold_seconds,
         },
     }
+
+    quality_report = build_quality_report(
+        quality_rules=quality_rules,
+        expected_raw_records=expected_raw_records,
+        raw_records=raw_records,
+        bronze_records=bronze_records,
+        silver_rows=len(silver_df),
+        gold_rows=len(gold_df),
+    )
+    manifest["quality_report"] = quality_report
+    if not quality_report["passed"]:
+        failed = ", ".join(quality_report["failed_checks"])
+        raise ValueError(f"Quality gate failed: {failed}")
+
     manifest_path = write_run_manifest(container_client, manifest)
     total_seconds = round(time.perf_counter() - pipeline_started, 3)
 
@@ -1037,6 +1126,7 @@ def run_full_pipeline(
         "manifest_path": manifest_path,
         "openweather_api_key_source": config["openweather_api_key_source"],
         "storage_auth_source": config["storage_auth"]["source"],
+        "quality_report": quality_report,
         "timings": {
             "extract_seconds": extract_seconds,
             "silver_seconds": silver_seconds,

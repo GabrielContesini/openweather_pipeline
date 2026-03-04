@@ -45,11 +45,19 @@ Rodar pipeline Python:
 uv run python src/extract_data.py --env-file config/.env
 ```
 
+Pre-check antes de push:
+
+```bash
+uv run python scripts/pre_push_checks.py
+```
+
 ## Databricks (modo profissional)
 
 Runbook operacional:
 
 - `docs/OPERACAO_DATABRICKS.md`
+- `docs/CHECKLIST_QUALIDADE.md`
+- `docs/GIT_VERSIONAMENTO.md`
 
 ### 1. Secret scope
 
@@ -61,7 +69,11 @@ Crie um scope e chaves (exemplo):
 
 ### 2. Configurar o notebook 98
 
-No arquivo `notebooks/databricks/98_full_pipeline_no_widgets.py`, configure `PIPELINE_SETTINGS`.
+No arquivo `notebooks/databricks/98_full_pipeline_no_widgets.py`, configure:
+
+1. `ACTIVE_PROFILE`
+2. `PIPELINE_PROFILES`
+3. `LOCAL_OVERRIDE_FILE` (opcional para Free Edition)
 
 Padrao recomendado:
 
@@ -69,6 +81,17 @@ Padrao recomendado:
 - `manual_config.openweather_api_key = secret://kv-openweather/openweather-api-key`
 - `manual_config.storage_auth_mode = account_key`
 - `manual_config.storage_credential = secret://kv-openweather/storage-account-key`
+
+### 2.1 Databricks Free Edition (sem secret scope)
+
+Use o profile `free_plaintext_local` no notebook 98 e evite gravar chave no Git:
+
+1. Copie `config/databricks_free.local.example.json` para `config/databricks_free.local.json`.
+2. Preencha as chaves reais no arquivo local.
+3. Mantenha `ACTIVE_PROFILE = "free_plaintext_local"` no notebook 98.
+4. Mantenha `LOCAL_OVERRIDE_FILE = "config/databricks_free.local.json"`.
+
+Observacao: `config/databricks_free.local.json` ja esta no `.gitignore`.
 
 ### 3. Validacao manual inicial
 
@@ -119,6 +142,12 @@ Cada erro retorna JSON com:
 - `error_type`
 - `error_message`
 - `traceback`
+
+Qualidade (gate nativo):
+
+- `quality_report.passed = true`
+- `quality_report.failed_checks` vazio
+- regras configuraveis via `manual_config.quality_rules`
 
 ## Custos (Azure Free Credit)
 

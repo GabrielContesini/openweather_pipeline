@@ -1,0 +1,22 @@
+{
+  "allow_plaintext_credentials": true,
+  "create_container_if_missing": true,
+  "manual_config": {
+    "storage_account": "tropowxdlprod",
+    "container": "openweather-data",
+    "storage_auth_mode": "account_key",
+    "storage_credential": "<STORAGE_ACCOUNT_KEY>",
+    "openweather_api_key": "<OPENWEATHER_API_KEY>",
+    "openweather_base_url": "https://api.openweathermap.org/data/2.5",
+    "openweather_endpoints": ["weather"],
+    "openweather_units": "metric",
+    "openweather_lang": "pt_br",
+    "openweather_timeout_seconds": 30,
+    "cities": ["Sao Paulo,BR", "Rio de Janeiro,BR", "Curitiba,BR"],
+    "quality_rules": {
+      "enforce_exact_input_count": true,
+      "min_silver_rows": 1,
+      "min_gold_rows": 1
+    }
+  }
+}
