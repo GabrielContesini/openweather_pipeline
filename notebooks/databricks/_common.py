@@ -641,6 +641,9 @@ def stage_success(payload: dict[str, Any]) -> None:
 
 
 def stage_error(stage: str, exc: Exception, context: dict[str, Any] | None = None) -> None:
+    if type(exc).__name__ == "NotebookExit":
+        raise exc
+
     payload = {
         "status": "error",
         "stage": stage,
