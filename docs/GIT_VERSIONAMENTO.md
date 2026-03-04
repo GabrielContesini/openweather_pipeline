@@ -32,7 +32,8 @@ Exemplos:
 4. Incluir evidencias:
 - JSON de saida com `status = ok`
 - caminhos de `manifest_path`, `silver_blob_path` e `gold_blob_path`
-5. Nunca incluir credenciais reais.
+5. Nao versionar export bruto `.html` do Databricks.
+6. Nunca incluir credenciais reais.
 
 ## Tags e releases
 

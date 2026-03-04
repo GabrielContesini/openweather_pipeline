@@ -1,0 +1,46 @@
+{
+  "generated_at_utc": "2026-03-04T16:20:35Z",
+  "source_export_file": "docs/evidence/databricks_runs/2026-03-04/98_full_pipeline_no_widgets.html",
+  "notebook_name": "98_full_pipeline_no_widgets",
+  "status": "ok",
+  "stage": "full_pipeline_no_widgets",
+  "run_id": "c34efaa939b94a48be1bea36fb79ff34",
+  "ingestion_date": "2026-03-04",
+  "ingestion_hour": "16",
+  "record_counts": {
+    "raw_records": 3,
+    "bronze_records": 3,
+    "silver_rows": 3,
+    "gold_rows": 3
+  },
+  "quality": {
+    "passed": true,
+    "failed_checks": []
+  },
+  "sla": {
+    "passed": true,
+    "failed_checks": []
+  },
+  "delta": {
+    "enabled": false
+  },
+  "timings": {
+    "extract_seconds": 1.016,
+    "silver_seconds": 0.426,
+    "gold_seconds": 0.198,
+    "delta_seconds": 0.0,
+    "total_seconds": 2.431
+  },
+  "paths": {
+    "storage_preflight_path": "raw/openweather/_control/healthcheck/run_id=c34efaa939b94a48be1bea36fb79ff34.json",
+    "silver_blob_path": "silver/openweather/openweather_current_weather/ingestion_date=2026-03-04/ingestion_hour=16/run_id=c34efaa939b94a48be1bea36fb79ff34/part-00000.parquet",
+    "gold_blob_path": "gold/openweather/weather_city_daily_snapshot/ingestion_date=2026-03-04/ingestion_hour=16/run_id=c34efaa939b94a48be1bea36fb79ff34/part-00000.parquet",
+    "manifest_path": "raw/openweather/_control/runs/1772640990_c34efaa939b94a48be1bea36fb79ff34.json",
+    "observability_path": "raw/openweather/_control/observability/ingestion_date=2026-03-04/ingestion_hour=16/run_id=c34efaa939b94a48be1bea36fb79ff34.json"
+  },
+  "credential_sources": {
+    "openweather_api_key_source": "manual:plaintext",
+    "storage_auth_source": "manual:plaintext"
+  },
+  "active_profile": "free_plaintext_local"
+}

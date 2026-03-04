@@ -22,3 +22,7 @@ data/
 *.tfstate
 *.tfstate.*
 crash.log
+
+# Databricks notebook export artifacts
+/*.html
+docs/evidence/**/*.html

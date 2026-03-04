@@ -7,6 +7,15 @@ Pipeline de dados para ingestao OpenWeather e persistencia no Azure Blob Storage
 - `silver`: dataset curado em Parquet
 - `gold`: agregacao diaria por cidade em Parquet
 
+## Documentacao central
+
+- `docs/PROJECT_STRUCTURE.md`
+- `docs/OPERACAO_DATABRICKS.md`
+- `docs/CHECKLIST_QUALIDADE.md`
+- `docs/CICD.md`
+- `docs/ENTERPRISE_FOUNDATIONS.md`
+- `docs/EVIDENCIAS_EXECUCAO.md`
+
 ## Arquitetura de execucao
 
 Entrada oficial em Databricks:
@@ -53,6 +62,12 @@ Pre-check antes de push:
 uv run python scripts/pre_push_checks.py
 ```
 
+Gerar resumo de evidencias a partir de export HTML do Databricks:
+
+```bash
+uv run python scripts/extract_databricks_run_summary.py <caminho_do_html>
+```
+
 ## Databricks Free Edition (recomendado para este projeto)
 
 Runbooks:
@@ -62,6 +77,8 @@ Runbooks:
 - `docs/GIT_VERSIONAMENTO.md`
 - `docs/CICD.md`
 - `docs/ENTERPRISE_FOUNDATIONS.md`
+- `docs/PROJECT_STRUCTURE.md`
+- `docs/EVIDENCIAS_EXECUCAO.md`
 
 Infra as Code:
 
@@ -153,3 +170,7 @@ Para comecar com controle de custo:
 1. Execute a cada 6 horas.
 2. Monitore budget e alertas no Azure Cost Management.
 3. Revise frequencia so depois de 1-2 semanas de consumo observado.
+
+## Evidencia de run atual
+
+- `docs/evidence/databricks_runs/2026-03-04/98_full_pipeline_no_widgets.summary.json`
