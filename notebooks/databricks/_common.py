@@ -237,6 +237,7 @@ def build_quality_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "enforce_exact_input_count": bool(raw_rules.get("enforce_exact_input_count", True)),
         "min_silver_rows": int(raw_rules.get("min_silver_rows", 1)),
         "min_gold_rows": int(raw_rules.get("min_gold_rows", 1)),
+        "fail_on_quality_violation": bool(raw_rules.get("fail_on_quality_violation", True)),
     }
 
     if rules["min_silver_rows"] < 1:
@@ -245,6 +246,72 @@ def build_quality_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         raise ValueError("quality_rules.min_gold_rows must be >= 1.")
 
     return rules
+
+
+def build_sla_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
+    if raw_rules is None:
+        raw_rules = {}
+    if not isinstance(raw_rules, dict):
+        raise ValueError("sla_rules must be a dictionary.")
+
+    rules = {
+        "max_total_seconds": float(raw_rules.get("max_total_seconds", 900)),
+        "max_extract_seconds": float(raw_rules.get("max_extract_seconds", 600)),
+        "max_silver_seconds": float(raw_rules.get("max_silver_seconds", 240)),
+        "max_gold_seconds": float(raw_rules.get("max_gold_seconds", 240)),
+        "min_raw_records": int(raw_rules.get("min_raw_records", 1)),
+        "require_quality_passed": bool(raw_rules.get("require_quality_passed", True)),
+        "fail_on_sla_violation": bool(raw_rules.get("fail_on_sla_violation", True)),
+    }
+
+    if rules["max_total_seconds"] <= 0:
+        raise ValueError("sla_rules.max_total_seconds must be greater than zero.")
+    if rules["max_extract_seconds"] <= 0:
+        raise ValueError("sla_rules.max_extract_seconds must be greater than zero.")
+    if rules["max_silver_seconds"] <= 0:
+        raise ValueError("sla_rules.max_silver_seconds must be greater than zero.")
+    if rules["max_gold_seconds"] <= 0:
+        raise ValueError("sla_rules.max_gold_seconds must be greater than zero.")
+    if rules["min_raw_records"] < 1:
+        raise ValueError("sla_rules.min_raw_records must be >= 1.")
+
+    return rules
+
+
+def build_delta_config(raw_config: dict[str, Any] | None) -> dict[str, Any]:
+    if raw_config is None:
+        raw_config = {}
+    if not isinstance(raw_config, dict):
+        raise ValueError("delta_config must be a dictionary.")
+
+    config = {
+        "enabled": bool(raw_config.get("enabled", False)),
+        "catalog": str(raw_config.get("catalog", "")).strip(),
+        "schema": str(raw_config.get("schema", "weather_prd")).strip(),
+        "silver_table": str(
+            raw_config.get("silver_table", "openweather_current_weather_delta")
+        ).strip(),
+        "gold_table": str(
+            raw_config.get("gold_table", "weather_city_daily_snapshot_delta")
+        ).strip(),
+        "checkpoint_table": str(
+            raw_config.get("checkpoint_table", "openweather_pipeline_checkpoint")
+        ).strip(),
+        "merge_schema": bool(raw_config.get("merge_schema", True)),
+        "create_schema_if_missing": bool(raw_config.get("create_schema_if_missing", True)),
+    }
+
+    if config["enabled"]:
+        if not config["schema"]:
+            raise ValueError("delta_config.schema is required when delta_config.enabled=true.")
+        if not config["silver_table"]:
+            raise ValueError("delta_config.silver_table is required when enabled=true.")
+        if not config["gold_table"]:
+            raise ValueError("delta_config.gold_table is required when enabled=true.")
+        if not config["checkpoint_table"]:
+            raise ValueError("delta_config.checkpoint_table is required when enabled=true.")
+
+    return config
 
 
 def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
@@ -289,6 +356,8 @@ def get_runtime_config(*, require_api_key: bool = True) -> dict[str, Any]:
         "openweather_api_key": api_key,
         "openweather_api_key_source": api_key_source,
         "quality_rules": build_quality_rules(None),
+        "sla_rules": build_sla_rules(None),
+        "delta_config": build_delta_config(None),
     }
 
 
@@ -431,6 +500,8 @@ def build_runtime_config_from_manual_input(
         "openweather_api_key": api_key,
         "openweather_api_key_source": api_key_source,
         "quality_rules": build_quality_rules(manual_config.get("quality_rules")),
+        "sla_rules": build_sla_rules(manual_config.get("sla_rules")),
+        "delta_config": build_delta_config(manual_config.get("delta_config")),
     }
 
 
@@ -904,6 +975,350 @@ def build_quality_report(
     }
 
 
+def build_sla_report(
+    *,
+    sla_rules: dict[str, Any],
+    timings: dict[str, Any],
+    raw_records: int,
+    quality_report: dict[str, Any],
+) -> dict[str, Any]:
+    checks = [
+        {
+            "name": "raw_records_min",
+            "passed": raw_records >= int(sla_rules["min_raw_records"]),
+            "actual": raw_records,
+            "expected_min": int(sla_rules["min_raw_records"]),
+        },
+        {
+            "name": "extract_seconds_sla",
+            "passed": float(timings["extract_seconds"]) <= float(sla_rules["max_extract_seconds"]),
+            "actual": float(timings["extract_seconds"]),
+            "expected_max": float(sla_rules["max_extract_seconds"]),
+        },
+        {
+            "name": "silver_seconds_sla",
+            "passed": float(timings["silver_seconds"]) <= float(sla_rules["max_silver_seconds"]),
+            "actual": float(timings["silver_seconds"]),
+            "expected_max": float(sla_rules["max_silver_seconds"]),
+        },
+        {
+            "name": "gold_seconds_sla",
+            "passed": float(timings["gold_seconds"]) <= float(sla_rules["max_gold_seconds"]),
+            "actual": float(timings["gold_seconds"]),
+            "expected_max": float(sla_rules["max_gold_seconds"]),
+        },
+        {
+            "name": "total_seconds_sla",
+            "passed": float(timings["total_seconds"]) <= float(sla_rules["max_total_seconds"]),
+            "actual": float(timings["total_seconds"]),
+            "expected_max": float(sla_rules["max_total_seconds"]),
+        },
+    ]
+
+    if bool(sla_rules.get("require_quality_passed", True)):
+        checks.insert(
+            0,
+            {
+                "name": "quality_gate_passed",
+                "passed": bool(quality_report.get("passed", False)),
+                "actual": bool(quality_report.get("passed", False)),
+                "expected": True,
+            },
+        )
+
+    failed_checks = [check["name"] for check in checks if not check["passed"]]
+    return {
+        "passed": not failed_checks,
+        "checks": checks,
+        "failed_checks": failed_checks,
+    }
+
+
+def build_gold_dataframe(
+    silver_df: pd.DataFrame,
+    watermark: dict[str, Any],
+) -> pd.DataFrame:
+    source_max_epoch = pd.to_numeric(silver_df["observation_epoch"], errors="coerce").max()
+    source_max_epoch = int(source_max_epoch) if pd.notna(source_max_epoch) else None
+
+    gold_df = (
+        silver_df.groupby(["event_date", "city_name", "country"], dropna=False)
+        .agg(
+            records_count=("city_id", "count"),
+            temperature_avg_celsius=("temperature_celsius", "mean"),
+            temperature_min_celsius=("temp_min_celsius", "min"),
+            temperature_max_celsius=("temp_max_celsius", "max"),
+            humidity_avg_pct=("humidity_pct", "mean"),
+            wind_speed_avg_ms=("wind_speed_ms", "mean"),
+            last_observation_ts_utc=("observation_ts_utc", "max"),
+        )
+        .reset_index()
+    )
+    gold_df["watermark_run_id"] = watermark["run_id"]
+    gold_df["watermark_ingestion_ts_utc"] = watermark["ingestion_ts_utc"]
+    gold_df["watermark_ingestion_epoch"] = watermark["ingestion_epoch"]
+    gold_df["watermark_source_max_epoch"] = source_max_epoch
+    gold_df["watermark_source_max_ts_utc"] = epoch_to_iso_utc(source_max_epoch)
+    return gold_df
+
+
+def write_observability_event(
+    container_client: Any,
+    *,
+    watermark: dict[str, Any],
+    payload: dict[str, Any],
+) -> str:
+    event_path = (
+        "raw/openweather/_control/observability/"
+        f"ingestion_date={watermark['ingestion_date']}/"
+        f"ingestion_hour={watermark['ingestion_hour']}/"
+        f"run_id={watermark['run_id']}.json"
+    )
+    upload_json_blob(
+        container_client,
+        event_path,
+        payload,
+        compact=False,
+        metadata=build_blob_metadata("raw", watermark),
+    )
+    return event_path
+
+
+def quote_sql_identifier(identifier: str) -> str:
+    return f"`{identifier.replace('`', '``')}`"
+
+
+def quote_table_fqn(table_fqn: str) -> str:
+    return ".".join(quote_sql_identifier(part) for part in table_fqn.split("."))
+
+
+def build_delta_namespace(delta_config: dict[str, Any]) -> str:
+    catalog = str(delta_config.get("catalog", "")).strip()
+    schema = str(delta_config.get("schema", "")).strip()
+    if catalog:
+        return f"{catalog}.{schema}"
+    return schema
+
+
+def build_delta_table_fqn(delta_config: dict[str, Any], table_key: str) -> str:
+    namespace = build_delta_namespace(delta_config)
+    table_name = str(delta_config[table_key]).strip()
+    return f"{namespace}.{table_name}"
+
+
+def spark_table_exists(table_fqn: str) -> bool:
+    try:
+        return bool(spark.catalog.tableExists(table_fqn))
+    except Exception:
+        try:
+            spark.table(table_fqn)
+            return True
+        except Exception:
+            return False
+
+
+def ensure_delta_namespace(delta_config: dict[str, Any]) -> None:
+    catalog = str(delta_config.get("catalog", "")).strip()
+    schema = str(delta_config["schema"]).strip()
+    if catalog:
+        spark.sql(f"CREATE CATALOG IF NOT EXISTS {quote_sql_identifier(catalog)}")
+        schema_fqn = (
+            f"{quote_sql_identifier(catalog)}.{quote_sql_identifier(schema)}"
+        )
+    else:
+        schema_fqn = quote_sql_identifier(schema)
+
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {schema_fqn}")
+
+
+def upsert_pandas_to_delta(
+    *,
+    dataframe: pd.DataFrame,
+    table_fqn: str,
+    merge_keys: list[str],
+    merge_schema: bool,
+) -> dict[str, Any]:
+    if dataframe.empty:
+        return {"mode": "noop", "rows": 0, "table": table_fqn}
+
+    if not merge_keys:
+        raise ValueError(f"merge_keys is required for upsert on table {table_fqn}.")
+
+    spark.conf.set(
+        "spark.databricks.delta.schema.autoMerge.enabled",
+        "true" if merge_schema else "false",
+    )
+
+    spark_df = spark.createDataFrame(dataframe)
+    input_rows = int(len(dataframe))
+    if not spark_table_exists(table_fqn):
+        writer = spark_df.write.format("delta").mode("overwrite")
+        if merge_schema:
+            writer = writer.option("mergeSchema", "true")
+        writer.saveAsTable(table_fqn)
+        return {"mode": "create", "rows": input_rows, "table": table_fqn}
+
+    view_name = f"vw_upsert_{uuid.uuid4().hex}"
+    spark_df.createOrReplaceTempView(view_name)
+    quoted_table = quote_table_fqn(table_fqn)
+
+    merge_keys = [key for key in merge_keys if key in dataframe.columns]
+    if not merge_keys:
+        raise ValueError(f"None of merge_keys exist in dataframe for table {table_fqn}.")
+
+    all_columns = list(dataframe.columns)
+    merge_condition = " AND ".join(
+        [
+            f"target.{quote_sql_identifier(key)} <=> source.{quote_sql_identifier(key)}"
+            for key in merge_keys
+        ]
+    )
+    updatable_columns = [column for column in all_columns if column not in merge_keys]
+    if updatable_columns:
+        update_set = ", ".join(
+            [
+                f"target.{quote_sql_identifier(column)} = source.{quote_sql_identifier(column)}"
+                for column in updatable_columns
+            ]
+        )
+    else:
+        first_key = merge_keys[0]
+        update_set = (
+            f"target.{quote_sql_identifier(first_key)} = "
+            f"source.{quote_sql_identifier(first_key)}"
+        )
+
+    insert_columns = ", ".join(quote_sql_identifier(column) for column in all_columns)
+    insert_values = ", ".join(
+        f"source.{quote_sql_identifier(column)}" for column in all_columns
+    )
+
+    merge_sql = f"""
+MERGE INTO {quoted_table} AS target
+USING {view_name} AS source
+ON {merge_condition}
+WHEN MATCHED THEN UPDATE SET {update_set}
+WHEN NOT MATCHED THEN INSERT ({insert_columns}) VALUES ({insert_values})
+"""
+    spark.sql(merge_sql)
+    spark.catalog.dropTempView(view_name)
+    return {"mode": "merge", "rows": input_rows, "table": table_fqn}
+
+
+def append_pandas_to_delta(
+    *,
+    dataframe: pd.DataFrame,
+    table_fqn: str,
+    merge_schema: bool,
+) -> dict[str, Any]:
+    if dataframe.empty:
+        return {"mode": "noop", "rows": 0, "table": table_fqn}
+
+    spark_df = spark.createDataFrame(dataframe)
+    input_rows = int(len(dataframe))
+    if not spark_table_exists(table_fqn):
+        writer = spark_df.write.format("delta").mode("overwrite")
+        if merge_schema:
+            writer = writer.option("mergeSchema", "true")
+        writer.saveAsTable(table_fqn)
+        return {"mode": "create", "rows": input_rows, "table": table_fqn}
+
+    writer = spark_df.write.format("delta").mode("append")
+    if merge_schema:
+        writer = writer.option("mergeSchema", "true")
+    writer.saveAsTable(table_fqn)
+    return {"mode": "append", "rows": input_rows, "table": table_fqn}
+
+
+def run_delta_upserts(
+    *,
+    config: dict[str, Any],
+    silver_df: pd.DataFrame,
+    gold_df: pd.DataFrame,
+    watermark: dict[str, Any],
+    timings: dict[str, Any],
+    raw_records: int | None = None,
+    total_seconds: float | None = None,
+) -> dict[str, Any]:
+    delta_config = build_delta_config(config.get("delta_config"))
+    if not delta_config["enabled"]:
+        return {"enabled": False}
+
+    try:
+        spark  # noqa: B018
+    except NameError as exc:
+        raise RuntimeError(
+            "delta_config.enabled=true requires Spark session in Databricks."
+        ) from exc
+
+    if delta_config["create_schema_if_missing"]:
+        ensure_delta_namespace(delta_config)
+
+    silver_table_fqn = build_delta_table_fqn(delta_config, "silver_table")
+    gold_table_fqn = build_delta_table_fqn(delta_config, "gold_table")
+    checkpoint_table_fqn = build_delta_table_fqn(delta_config, "checkpoint_table")
+
+    silver_delta_df = silver_df.copy()
+    silver_delta_df["pipeline_run_id"] = watermark["run_id"]
+    silver_delta_df["pipeline_ingestion_ts_utc"] = watermark["ingestion_ts_utc"]
+    silver_delta_df["pipeline_ingestion_date"] = watermark["ingestion_date"]
+    silver_delta_df["pipeline_ingestion_hour"] = watermark["ingestion_hour"]
+
+    gold_delta_df = gold_df.copy()
+    gold_delta_df["pipeline_run_id"] = watermark["run_id"]
+    gold_delta_df["pipeline_ingestion_ts_utc"] = watermark["ingestion_ts_utc"]
+    gold_delta_df["pipeline_ingestion_date"] = watermark["ingestion_date"]
+    gold_delta_df["pipeline_ingestion_hour"] = watermark["ingestion_hour"]
+
+    silver_write_result = upsert_pandas_to_delta(
+        dataframe=silver_delta_df,
+        table_fqn=silver_table_fqn,
+        merge_keys=["city_id", "observation_epoch"],
+        merge_schema=bool(delta_config["merge_schema"]),
+    )
+    gold_write_result = upsert_pandas_to_delta(
+        dataframe=gold_delta_df,
+        table_fqn=gold_table_fqn,
+        merge_keys=["event_date", "city_name", "country"],
+        merge_schema=bool(delta_config["merge_schema"]),
+    )
+
+    checkpoint_df = pd.DataFrame(
+        [
+            {
+                "run_id": watermark["run_id"],
+                "ingestion_ts_utc": watermark["ingestion_ts_utc"],
+                "ingestion_epoch": watermark["ingestion_epoch"],
+                "ingestion_date": watermark["ingestion_date"],
+                "ingestion_hour": watermark["ingestion_hour"],
+                "raw_records": int(raw_records if raw_records is not None else len(silver_df)),
+                "silver_rows": int(len(silver_df)),
+                "gold_rows": int(len(gold_df)),
+                "extract_seconds": float(timings["extract_seconds"]),
+                "silver_seconds": float(timings["silver_seconds"]),
+                "gold_seconds": float(timings["gold_seconds"]),
+                "total_seconds": float(total_seconds if total_seconds is not None else 0.0),
+            }
+        ]
+    )
+    checkpoint_write_result = append_pandas_to_delta(
+        dataframe=checkpoint_df,
+        table_fqn=checkpoint_table_fqn,
+        merge_schema=bool(delta_config["merge_schema"]),
+    )
+
+    return {
+        "enabled": True,
+        "namespace": build_delta_namespace(delta_config),
+        "silver_table": silver_table_fqn,
+        "gold_table": gold_table_fqn,
+        "checkpoint_table": checkpoint_table_fqn,
+        "silver_write": silver_write_result,
+        "gold_write": gold_write_result,
+        "checkpoint_write": checkpoint_write_result,
+    }
+
+
 def run_full_pipeline(
     config: dict[str, Any],
     *,
@@ -1030,27 +1445,7 @@ def run_full_pipeline(
     silver_seconds = round(time.perf_counter() - silver_started, 3)
 
     gold_started = time.perf_counter()
-    source_max_epoch = pd.to_numeric(silver_df["observation_epoch"], errors="coerce").max()
-    source_max_epoch = int(source_max_epoch) if pd.notna(source_max_epoch) else None
-
-    gold_df = (
-        silver_df.groupby(["event_date", "city_name", "country"], dropna=False)
-        .agg(
-            records_count=("city_id", "count"),
-            temperature_avg_celsius=("temperature_celsius", "mean"),
-            temperature_min_celsius=("temp_min_celsius", "min"),
-            temperature_max_celsius=("temp_max_celsius", "max"),
-            humidity_avg_pct=("humidity_pct", "mean"),
-            wind_speed_avg_ms=("wind_speed_ms", "mean"),
-            last_observation_ts_utc=("observation_ts_utc", "max"),
-        )
-        .reset_index()
-    )
-    gold_df["watermark_run_id"] = watermark["run_id"]
-    gold_df["watermark_ingestion_ts_utc"] = watermark["ingestion_ts_utc"]
-    gold_df["watermark_ingestion_epoch"] = watermark["ingestion_epoch"]
-    gold_df["watermark_source_max_epoch"] = source_max_epoch
-    gold_df["watermark_source_max_ts_utc"] = epoch_to_iso_utc(source_max_epoch)
+    gold_df = build_gold_dataframe(silver_df, watermark)
 
     gold_blob_path = build_dataset_blob_path(
         layer="gold",
@@ -1067,6 +1462,60 @@ def run_full_pipeline(
         metadata=build_blob_metadata("gold", watermark),
     )
     gold_seconds = round(time.perf_counter() - gold_started, 3)
+
+    delta_started = time.perf_counter()
+    delta_report = run_delta_upserts(
+        config=config,
+        silver_df=silver_df,
+        gold_df=gold_df,
+        watermark=watermark,
+        timings={
+            "extract_seconds": extract_seconds,
+            "silver_seconds": silver_seconds,
+            "gold_seconds": gold_seconds,
+        },
+        raw_records=raw_records,
+    )
+    delta_seconds = round(time.perf_counter() - delta_started, 3)
+
+    total_seconds = round(time.perf_counter() - pipeline_started, 3)
+    timings = {
+        "extract_seconds": extract_seconds,
+        "silver_seconds": silver_seconds,
+        "gold_seconds": gold_seconds,
+        "delta_seconds": delta_seconds,
+        "total_seconds": total_seconds,
+    }
+
+    quality_report = build_quality_report(
+        quality_rules=quality_rules,
+        expected_raw_records=expected_raw_records,
+        raw_records=raw_records,
+        bronze_records=bronze_records,
+        silver_rows=len(silver_df),
+        gold_rows=len(gold_df),
+    )
+    sla_rules = build_sla_rules(config.get("sla_rules"))
+    sla_report = build_sla_report(
+        sla_rules=sla_rules,
+        timings=timings,
+        raw_records=raw_records,
+        quality_report=quality_report,
+    )
+
+    quality_violation = not quality_report["passed"]
+    sla_violation = not sla_report["passed"]
+    failure_reasons: list[str] = []
+    if quality_violation:
+        failure_reasons.append(
+            f"quality:{','.join(quality_report['failed_checks'])}"
+        )
+    if sla_violation:
+        failure_reasons.append(
+            f"sla:{','.join(sla_report['failed_checks'])}"
+        )
+
+    run_status = "ok" if not failure_reasons else "violated"
 
     manifest = {
         "run_id": watermark["run_id"],
@@ -1087,28 +1536,49 @@ def run_full_pipeline(
         "storage_preflight_path": preflight_path,
         "silver_blob_path": silver_blob_path,
         "gold_blob_path": gold_blob_path,
-        "timings": {
-            "extract_seconds": extract_seconds,
-            "silver_seconds": silver_seconds,
-            "gold_seconds": gold_seconds,
-        },
+        "timings": timings,
+        "quality_report": quality_report,
+        "sla_report": sla_report,
+        "delta_report": delta_report,
+        "run_status": run_status,
+        "failure_reasons": failure_reasons,
     }
-
-    quality_report = build_quality_report(
-        quality_rules=quality_rules,
-        expected_raw_records=expected_raw_records,
-        raw_records=raw_records,
-        bronze_records=bronze_records,
-        silver_rows=len(silver_df),
-        gold_rows=len(gold_df),
-    )
-    manifest["quality_report"] = quality_report
-    if not quality_report["passed"]:
-        failed = ", ".join(quality_report["failed_checks"])
-        raise ValueError(f"Quality gate failed: {failed}")
-
     manifest_path = write_run_manifest(container_client, manifest)
-    total_seconds = round(time.perf_counter() - pipeline_started, 3)
+
+    observability_payload = {
+        "status": run_status,
+        "run_id": watermark["run_id"],
+        "ingestion_ts_utc": watermark["ingestion_ts_utc"],
+        "ingestion_date": watermark["ingestion_date"],
+        "ingestion_hour": watermark["ingestion_hour"],
+        "raw_records": raw_records,
+        "bronze_records": bronze_records,
+        "silver_rows": len(silver_df),
+        "gold_rows": len(gold_df),
+        "timings": timings,
+        "quality_report": quality_report,
+        "sla_report": sla_report,
+        "delta_report": delta_report,
+        "manifest_path": manifest_path,
+    }
+    observability_path = write_observability_event(
+        container_client,
+        watermark=watermark,
+        payload=observability_payload,
+    )
+
+    enforcement_errors: list[str] = []
+    if quality_violation and bool(quality_rules.get("fail_on_quality_violation", True)):
+        enforcement_errors.append(f"quality:{','.join(quality_report['failed_checks'])}")
+    if sla_violation and bool(sla_rules.get("fail_on_sla_violation", True)):
+        enforcement_errors.append(f"sla:{','.join(sla_report['failed_checks'])}")
+    if enforcement_errors:
+        raise ValueError(
+            "Run gate violation: "
+            + " | ".join(enforcement_errors)
+            + f" | manifest_path={manifest_path}"
+            + f" | observability_path={observability_path}"
+        )
 
     return {
         "status": "ok",
@@ -1124,15 +1594,13 @@ def run_full_pipeline(
         "silver_blob_path": silver_blob_path,
         "gold_blob_path": gold_blob_path,
         "manifest_path": manifest_path,
+        "observability_path": observability_path,
         "openweather_api_key_source": config["openweather_api_key_source"],
         "storage_auth_source": config["storage_auth"]["source"],
         "quality_report": quality_report,
-        "timings": {
-            "extract_seconds": extract_seconds,
-            "silver_seconds": silver_seconds,
-            "gold_seconds": gold_seconds,
-            "total_seconds": total_seconds,
-        },
+        "sla_report": sla_report,
+        "delta_report": delta_report,
+        "timings": timings,
     }
 
 

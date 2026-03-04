@@ -1,0 +1,17 @@
+resource_group_name          = "openweather_pipeline"
+location                     = "eastus"
+storage_account_name         = "tropowxdlprod"
+storage_container_name       = "openweather-data"
+create_storage_resources     = false
+
+log_analytics_workspace_name = "law-openweather-prd"
+log_analytics_retention_days = 30
+
+monitor_action_group_name    = "ag-openweather-prd"
+alert_email_receiver         = "dataops@company.com"
+
+enable_storage_diagnostics   = true
+enable_databricks_diagnostics = true
+databricks_workspace_id      = "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Databricks/workspaces/<workspace-name>"
+
+storage_egress_threshold_bytes = 1073741824

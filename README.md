@@ -19,6 +19,8 @@ Suporte tecnico (debug e desenvolvimento):
 - `notebooks/databricks/01_raw_bronze_ingestion.py`
 - `notebooks/databricks/02_silver_transform.py`
 - `notebooks/databricks/03_gold_transform.py`
+- `notebooks/databricks/110_uc_governance_bootstrap.py`
+- `notebooks/databricks/120_delta_backfill_from_bronze.py`
 - `notebooks/databricks/_common.py`
 
 ## Padrao de armazenamento
@@ -59,6 +61,11 @@ Runbook operacional:
 - `docs/CHECKLIST_QUALIDADE.md`
 - `docs/GIT_VERSIONAMENTO.md`
 - `docs/CICD.md`
+- `docs/ENTERPRISE_FOUNDATIONS.md`
+
+Infra as Code:
+
+- `infra/terraform`
 
 ### 1. Secret scope
 
@@ -82,6 +89,7 @@ Padrao recomendado:
 - `manual_config.openweather_api_key = secret://kv-openweather/openweather-api-key`
 - `manual_config.storage_auth_mode = account_key`
 - `manual_config.storage_credential = secret://kv-openweather/storage-account-key`
+- `manual_config.delta_config.enabled = true` (quando quiser Delta incremental)
 
 ### 2.1 Databricks Free Edition (sem secret scope)
 
@@ -149,6 +157,12 @@ Qualidade (gate nativo):
 - `quality_report.passed = true`
 - `quality_report.failed_checks` vazio
 - regras configuraveis via `manual_config.quality_rules`
+
+SLA (gate nativo):
+
+- `sla_report.passed = true`
+- regras configuraveis via `manual_config.sla_rules`
+- evento operacional em `_control/observability`
 
 ## Custos (Azure Free Credit)
 

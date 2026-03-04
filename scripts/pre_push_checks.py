@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,8 @@ COMPILE_TARGETS = [
     "notebooks/databricks/02_silver_transform.py",
     "notebooks/databricks/03_gold_transform.py",
     "notebooks/databricks/98_full_pipeline_no_widgets.py",
+    "notebooks/databricks/110_uc_governance_bootstrap.py",
+    "notebooks/databricks/120_delta_backfill_from_bronze.py",
     "scripts/deploy_databricks_workspace.py",
     "src/settings.py",
     "src/openweather_client.py",
@@ -83,11 +86,29 @@ def check_forbidden_tracked_files() -> list[str]:
     return failures
 
 
+def check_terraform_fmt_if_available() -> list[str]:
+    terraform_binary = shutil.which("terraform")
+    terraform_dir = ROOT / "infra" / "terraform"
+    if terraform_binary is None:
+        return []
+    if not terraform_dir.exists():
+        return []
+
+    result = run_command(
+        [terraform_binary, "fmt", "-check", "-recursive", str(terraform_dir)]
+    )
+    if result.returncode == 0:
+        return []
+    details = result.stderr.strip() or result.stdout.strip()
+    return [f"terraform fmt -check failed:\n{details}"]
+
+
 def main() -> int:
     failures: list[str] = []
     failures.extend(check_syntax())
     failures.extend(check_notebook_plaintext_credentials())
     failures.extend(check_forbidden_tracked_files())
+    failures.extend(check_terraform_fmt_if_available())
 
     if failures:
         print("Pre-push checks failed:\n")

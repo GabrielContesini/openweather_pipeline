@@ -21,6 +21,7 @@ class CommonQualityTests(unittest.TestCase):
         self.assertTrue(rules["enforce_exact_input_count"])
         self.assertEqual(rules["min_silver_rows"], 1)
         self.assertEqual(rules["min_gold_rows"], 1)
+        self.assertTrue(rules["fail_on_quality_violation"])
 
     def test_build_quality_rules_invalid_min_raises(self) -> None:
         with self.assertRaises(ValueError):
@@ -65,6 +66,57 @@ class CommonQualityTests(unittest.TestCase):
         self.assertIn("raw_equals_expected_input", report["failed_checks"])
         self.assertIn("silver_min_rows", report["failed_checks"])
         self.assertIn("gold_min_rows", report["failed_checks"])
+
+    def test_build_sla_rules_defaults(self) -> None:
+        rules = db_common.build_sla_rules(None)
+        self.assertEqual(rules["max_total_seconds"], 900)
+        self.assertEqual(rules["min_raw_records"], 1)
+        self.assertTrue(rules["require_quality_passed"])
+        self.assertTrue(rules["fail_on_sla_violation"])
+
+    def test_build_sla_report_failed(self) -> None:
+        rules = db_common.build_sla_rules(
+            {
+                "max_total_seconds": 10,
+                "max_extract_seconds": 5,
+                "max_silver_seconds": 2,
+                "max_gold_seconds": 2,
+                "min_raw_records": 3,
+                "require_quality_passed": True,
+            }
+        )
+        report = db_common.build_sla_report(
+            sla_rules=rules,
+            timings={
+                "extract_seconds": 6,
+                "silver_seconds": 3,
+                "gold_seconds": 3,
+                "total_seconds": 12,
+            },
+            raw_records=1,
+            quality_report={"passed": False},
+        )
+        self.assertFalse(report["passed"])
+        self.assertIn("quality_gate_passed", report["failed_checks"])
+        self.assertIn("total_seconds_sla", report["failed_checks"])
+
+    def test_build_delta_config_defaults(self) -> None:
+        config = db_common.build_delta_config(None)
+        self.assertFalse(config["enabled"])
+        self.assertEqual(config["schema"], "weather_prd")
+        self.assertTrue(config["merge_schema"])
+
+    def test_build_delta_config_enabled_requires_schema(self) -> None:
+        with self.assertRaises(ValueError):
+            db_common.build_delta_config(
+                {
+                    "enabled": True,
+                    "schema": "",
+                    "silver_table": "silver_t",
+                    "gold_table": "gold_t",
+                    "checkpoint_table": "ck_t",
+                }
+            )
 
 
 if __name__ == "__main__":

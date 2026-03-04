@@ -11,11 +11,15 @@ O projeto agora possui dois workflows GitHub Actions:
 - roda em `push` para `main` (quando ha mudanca em notebooks/scripts de deploy)
 - tambem pode ser disparado manualmente (`workflow_dispatch`)
 - faz deploy dos notebooks para Databricks Workspace via API REST
+3. `iac-terraform-validate`:
+- roda em PR/push quando houver mudanca em `infra/terraform`
+- executa `terraform fmt`, `init -backend=false` e `validate`
 
 ## Arquivos de workflow
 
 1. `.github/workflows/ci.yml`
 2. `.github/workflows/cd-databricks-workspace.yml`
+3. `.github/workflows/iac-terraform-validate.yml`
 
 ## O que o CI valida
 
