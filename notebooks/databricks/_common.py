@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import traceback
 import uuid
 from datetime import datetime, timezone
 from io import BytesIO
@@ -631,3 +632,25 @@ def coerce_numeric_columns(dataframe: pd.DataFrame, columns: list[str]) -> pd.Da
         if column in dataframe.columns:
             dataframe[column] = pd.to_numeric(dataframe[column], errors="coerce")
     return dataframe
+
+
+def stage_success(payload: dict[str, Any]) -> None:
+    text = json.dumps(payload, ensure_ascii=False)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    dbutils.notebook.exit(text)
+
+
+def stage_error(stage: str, exc: Exception, context: dict[str, Any] | None = None) -> None:
+    payload = {
+        "status": "error",
+        "stage": stage,
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+        "traceback": traceback.format_exc(),
+    }
+    if context:
+        payload["context"] = context
+
+    text = json.dumps(payload, ensure_ascii=False)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    dbutils.notebook.exit(text)

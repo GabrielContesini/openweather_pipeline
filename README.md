@@ -163,3 +163,14 @@ Se seu cluster ja tem permissao no storage (Managed Identity / Service Principal
 Template de payload para `Jobs API 2.1 /jobs/run-now`:
 
 - `notebooks/databricks/controlm_run_now_payload.example.json`
+
+## Troubleshooting
+
+Os notebooks de stage (`00`, `01`, `02`, `03`) retornam JSON com:
+
+- `status`
+- `error_type`
+- `error_message`
+- `traceback`
+
+Se o `99_controlm_entrypoint` falhar, a mensagem ja inclui a causa raiz retornada pelo stage.

@@ -37,7 +37,25 @@ def run_stage(stage_name: str, notebook_name: str, args: dict[str, str]) -> dict
     notebook_path = f"{base_dir}/{notebook_name}"
     try:
         result_text = dbutils.notebook.run(notebook_path, stage_timeout_seconds, args)
-        return json.loads(result_text)
+        try:
+            result_payload = json.loads(result_text)
+        except Exception as parse_exc:
+            preview = result_text[:1500]
+            raise RuntimeError(
+                f"Stage '{stage_name}' returned non-JSON output. Preview: {preview}"
+            ) from parse_exc
+
+        if result_payload.get("status") != "ok":
+            error_type = result_payload.get("error_type", "UnknownError")
+            error_message = result_payload.get("error_message", "No error_message returned")
+            error_trace = result_payload.get("traceback", "")
+            trace_preview = error_trace[:3000]
+            raise RuntimeError(
+                f"Stage '{stage_name}' returned error {error_type}: {error_message}\n"
+                f"Traceback:\n{trace_preview}"
+            )
+
+        return result_payload
     except Exception as exc:
         root_details = str(exc)
         raise RuntimeError(
