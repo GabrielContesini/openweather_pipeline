@@ -40,8 +40,8 @@ resource "azurerm_storage_container" "this" {
 }
 
 locals {
-  storage_account_id = var.create_storage_resources ? azurerm_storage_account.this[0].id : data.azurerm_storage_account.existing[0].id
-  storage_account_name = var.create_storage_resources ? azurerm_storage_account.this[0].name : data.azurerm_storage_account.existing[0].name
+  storage_account_id     = var.create_storage_resources ? azurerm_storage_account.this[0].id : data.azurerm_storage_account.existing[0].id
+  storage_account_name   = var.create_storage_resources ? azurerm_storage_account.this[0].name : data.azurerm_storage_account.existing[0].name
   storage_container_name = var.create_storage_resources ? azurerm_storage_container.this[0].name : data.azurerm_storage_container.existing[0].name
 }
 
