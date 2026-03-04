@@ -65,6 +65,7 @@ Pacote de notebooks pronto para importar no Databricks:
 
 - `notebooks/databricks/_common.py`
 - `notebooks/databricks/00_smoke_test.py`
+- `notebooks/databricks/98_full_pipeline_no_widgets.py`
 - `notebooks/databricks/01_raw_bronze_ingestion.py`
 - `notebooks/databricks/02_silver_transform.py`
 - `notebooks/databricks/03_gold_transform.py`
@@ -89,6 +90,15 @@ A leitura/escrita no Azure e feita direto via `azure-storage-blob`.
 2. Importe os arquivos `.py` acima como notebooks source.
 3. Execute primeiro `00_smoke_test`.
 4. Depois execute `99_controlm_entrypoint`.
+
+### Modo sem widgets
+
+Se sua interface nao mostrar widgets, use:
+
+- `notebooks/databricks/98_full_pipeline_no_widgets.py`
+
+Nesse notebook, preencha credenciais e parametros na celula `MANUAL_CONFIG` e rode `Run all`.
+Ele executa `raw -> bronze -> silver -> gold` diretamente.
 
 ### Widgets e segredos
 
