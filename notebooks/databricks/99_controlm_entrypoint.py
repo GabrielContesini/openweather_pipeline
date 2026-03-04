@@ -12,6 +12,9 @@
 # MAGIC %run ./_common
 
 # COMMAND ----------
+ensure_base_widgets()
+
+# COMMAND ----------
 ensure_widget("p_stage_timeout_seconds", "0")
 
 for widget_name, widget_default in DEFAULT_WIDGETS.items():

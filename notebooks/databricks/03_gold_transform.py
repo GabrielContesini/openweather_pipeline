@@ -10,6 +10,9 @@
 # MAGIC %run ./_common
 
 # COMMAND ----------
+ensure_base_widgets()
+
+# COMMAND ----------
 ensure_widget("p_run_id", "")
 ensure_widget("p_ingestion_date", "")
 ensure_widget("p_ingestion_hour", "")

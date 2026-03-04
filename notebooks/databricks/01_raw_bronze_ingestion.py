@@ -11,6 +11,9 @@
 # MAGIC %run ./_common
 
 # COMMAND ----------
+ensure_base_widgets()
+
+# COMMAND ----------
 try:
     config = get_runtime_config(require_api_key=True)
     container_client = get_container_client(config, create_if_missing=True)
