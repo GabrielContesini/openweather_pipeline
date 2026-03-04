@@ -1120,6 +1120,8 @@ def spark_table_exists(table_fqn: str) -> bool:
 def ensure_delta_namespace(delta_config: dict[str, Any]) -> None:
     catalog = str(delta_config.get("catalog", "")).strip()
     schema = str(delta_config["schema"]).strip()
+    if not catalog and schema.lower() == "default":
+        return
     if catalog:
         spark.sql(f"CREATE CATALOG IF NOT EXISTS {quote_sql_identifier(catalog)}")
         schema_fqn = (

@@ -57,6 +57,8 @@ Variables (opcional):
 1. `DATABRICKS_TARGET_PATH`
 - Default do script:
 `/Shared/openweather_pipeline/notebooks/databricks`
+- Para Free Edition, recomendado:
+`/Users/<seu_email>/openweather_pipeline/notebooks/databricks`
 
 ## Como gerar PAT no Databricks Free
 

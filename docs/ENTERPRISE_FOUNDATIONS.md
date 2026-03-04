@@ -9,6 +9,15 @@ This document covers four senior-level capabilities added to the project:
 3. Governance baseline with Unity Catalog and ACLs
 4. Delta incremental, idempotent upsert, and backfill strategy
 
+## Databricks Free constraints
+
+1. Unity Catalog/ACL lineage is usually unavailable.
+2. Secret scopes may be unavailable.
+3. Use free-compatible mode:
+- notebook `98` with `free_plaintext_local`
+- local file `config/databricks_free.local.json`
+- optional UC bootstrap notebook `110` may return `skipped`
+
 ## 1) Infrastructure as Code
 
 Location:
@@ -21,7 +30,7 @@ Main resources:
 2. Action Group (alerts)
 3. Diagnostic settings:
 - Storage -> Log Analytics
-- Databricks -> Log Analytics
+- Databricks -> Log Analytics (paid workspace only)
 4. Metric alerts:
 - Storage availability
 - Storage egress
@@ -91,3 +100,5 @@ Backfill controls:
 3. Enable Delta in notebook `98` profile
 4. Run notebook `98` for incremental
 5. Run notebook `120` for historical backfill
+
+For Free Edition, step 2 is optional and can be skipped.

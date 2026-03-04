@@ -61,7 +61,7 @@ variable "enable_storage_diagnostics" {
 variable "enable_databricks_diagnostics" {
   description = "Enable Databricks workspace diagnostic settings to Log Analytics."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "databricks_workspace_id" {

@@ -72,14 +72,22 @@ resource "azurerm_monitor_action_group" "this" {
 resource "azurerm_monitor_diagnostic_setting" "storage" {
   count                      = var.enable_storage_diagnostics ? 1 : 0
   name                       = "diag-storage-openweather"
-  target_resource_id         = local.storage_account_id
+  target_resource_id         = "${local.storage_account_id}/blobServices/default"
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
 
   enabled_log {
-    category_group = "allLogs"
+    category = "StorageRead"
   }
 
-  metric {
+  enabled_log {
+    category = "StorageWrite"
+  }
+
+  enabled_log {
+    category = "StorageDelete"
+  }
+
+  enabled_metric {
     category = "AllMetrics"
   }
 }
@@ -96,7 +104,7 @@ resource "azurerm_monitor_diagnostic_setting" "databricks" {
     category_group = "allLogs"
   }
 
-  metric {
+  enabled_metric {
     category = "AllMetrics"
   }
 }

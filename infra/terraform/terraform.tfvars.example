@@ -11,7 +11,7 @@ monitor_action_group_name    = "ag-openweather-prd"
 alert_email_receiver         = "dataops@company.com"
 
 enable_storage_diagnostics   = true
-enable_databricks_diagnostics = true
-databricks_workspace_id      = "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Databricks/workspaces/<workspace-name>"
+enable_databricks_diagnostics = false
+databricks_workspace_id      = ""
 
 storage_egress_threshold_bytes = 1073741824

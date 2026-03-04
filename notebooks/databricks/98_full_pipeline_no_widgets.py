@@ -14,6 +14,10 @@
 # MAGIC
 # MAGIC Optional local override file:
 # MAGIC - `config/databricks_free.local.json` (ignored in Git)
+# MAGIC
+# MAGIC Databricks Free Edition:
+# MAGIC - use `ACTIVE_PROFILE = "free_plaintext_local"`
+# MAGIC - do not require secret scope
 
 # COMMAND ----------
 # MAGIC %run ./_common
@@ -104,7 +108,7 @@ PIPELINE_PROFILES = {
             "delta_config": {
                 "enabled": False,
                 "catalog": "",
-                "schema": "weather_dev",
+                "schema": "default",
                 "silver_table": "openweather_current_weather_delta",
                 "gold_table": "weather_city_daily_snapshot_delta",
                 "checkpoint_table": "openweather_pipeline_checkpoint",

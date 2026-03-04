@@ -53,9 +53,9 @@ Pre-check antes de push:
 uv run python scripts/pre_push_checks.py
 ```
 
-## Databricks (modo profissional)
+## Databricks Free Edition (recomendado para este projeto)
 
-Runbook operacional:
+Runbooks:
 
 - `docs/OPERACAO_DATABRICKS.md`
 - `docs/CHECKLIST_QUALIDADE.md`
@@ -67,67 +67,49 @@ Infra as Code:
 
 - `infra/terraform`
 
-### 1. Secret scope
+### 1. Configurar credenciais no modo Free
 
-Crie um scope e chaves (exemplo):
-
-- scope: `kv-openweather`
-- key OpenWeather: `openweather-api-key`
-- key Storage: `storage-account-key`
+1. Copie `config/databricks_free.local.example.json` para `config/databricks_free.local.json`.
+2. Preencha `openweather_api_key` e `storage_credential` no arquivo local.
+3. O arquivo local ja esta ignorado no Git (`.gitignore`).
 
 ### 2. Configurar o notebook 98
 
 No arquivo `notebooks/databricks/98_full_pipeline_no_widgets.py`, configure:
 
-1. `ACTIVE_PROFILE`
-2. `PIPELINE_PROFILES`
-3. `LOCAL_OVERRIDE_FILE` (opcional para Free Edition)
-
-Padrao recomendado:
-
-- `allow_plaintext_credentials = False`
-- `manual_config.openweather_api_key = secret://kv-openweather/openweather-api-key`
-- `manual_config.storage_auth_mode = account_key`
-- `manual_config.storage_credential = secret://kv-openweather/storage-account-key`
-- `manual_config.delta_config.enabled = true` (quando quiser Delta incremental)
-
-### 2.1 Databricks Free Edition (sem secret scope)
-
-Use o profile `free_plaintext_local` no notebook 98 e evite gravar chave no Git:
-
-1. Copie `config/databricks_free.local.example.json` para `config/databricks_free.local.json`.
-2. Preencha as chaves reais no arquivo local.
-3. Mantenha `ACTIVE_PROFILE = "free_plaintext_local"` no notebook 98.
-4. Mantenha `LOCAL_OVERRIDE_FILE = "config/databricks_free.local.json"`.
-
-Observacao: `config/databricks_free.local.json` ja esta no `.gitignore`.
+1. `ACTIVE_PROFILE = "free_plaintext_local"`
+2. `LOCAL_OVERRIDE_FILE = "config/databricks_free.local.json"`
+3. `manual_config.delta_config.enabled = true` quando quiser gravar Delta incremental
 
 ### 3. Validacao manual inicial
 
 1. Rode `00_smoke_test.py`.
 2. Rode `98_full_pipeline_no_widgets.py`.
-3. Verifique o JSON final com `status = ok`.
+3. Verifique `status = ok`, `quality_report.passed = true` e `sla_report.passed = true`.
 
-### 4. Job Databricks (producao)
+### 4. Job Databricks
 
 Crie um Job com:
 
 1. Notebook task apontando para `98_full_pipeline_no_widgets.py`.
-2. Compute Serverless.
-3. `max_concurrent_runs = 1`.
-4. Retry de 2-3 tentativas.
-5. Timeout de 30 minutos.
-6. Schedule conforme custo/SLAs (ex.: a cada 6 horas no inicio).
+2. `max_concurrent_runs = 1`.
+3. Retry de 2-3 tentativas.
+4. Timeout de 30 minutos.
+5. Schedule conforme custo (ex.: a cada 6 horas no inicio).
+6. `Parameters` vazio (notebook no-widget).
 
-Observacao: como o notebook 98 e no-widget, a configuracao fica versionada no codigo do notebook.
-No painel da task, a secao `Parameters` pode ficar vazia.
+### 5. Recursos enterprise opcionais (workspace pago)
+
+1. Secret scope (`secret://...`) para remover plaintext.
+2. Unity Catalog + ACL/linhagem usando notebook `110`.
+3. Diagnostics de workspace Databricks no Azure Monitor.
 
 ## Credenciais e seguranca
 
 Prioridade de autenticacao:
 
-1. `secret://<scope>/<key>` (recomendado)
-2. plaintext (somente com `allow_plaintext_credentials=True`)
+1. `secret://<scope>/<key>` (workspace pago)
+2. plaintext com arquivo local (Free Edition)
 
 Metodos suportados para storage:
 
